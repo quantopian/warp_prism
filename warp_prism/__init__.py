@@ -1,6 +1,7 @@
 from io import BytesIO
 
 from datashape import discover
+from datashape.predicates import istabular
 import numpy as np
 from odo.backends.sql import getbind
 import pandas as pd
@@ -129,12 +130,16 @@ def to_dataframe(query, bind=None):
         query.
     """
     arrays = to_arrays(query, bind=bind)
-
     for name, (array, mask) in arrays.items():
+        if array.dtype.kind == 'i':
+            if not mask.all():
+                array = array.astype('float64')
+                array[~mask] = null_values[array.dtype]
+            arrays[name] = array
+            continue
+
         if array.dtype.kind == 'M':
-            array = array.view('datetime64[us]').astype('datetime64[ns]')
-        elif array.dtype.kind == 'i' and not mask.all():
-            array = array.astype('float64')
+            array = array.astype('datetime64[ns]')
 
         array[~mask] = null_values[array.dtype]
         arrays[name] = array
@@ -153,11 +158,13 @@ def register_odo_dataframe_edge():
     """
     from odo import convert
 
+    # estimating 8 times faster
+    df_cost = convert.graph.edge[sa.sql.Select][pd.DataFrame]['cost'] / 8
+
     @convert.register(
         pd.DataFrame,
         (sa.sql.Select, sa.sql.Selectable),
-        # estimating 8 times faster
-        cost=convert.graph.edge[sa.sql.Select][pd.DataFrame]['cost'] / 8,
+        cost=df_cost,
     )
     def select_or_selectable_to_frame(el, bind=None, dshape=None, **kwargs):
         bind = getbind(el, bind)
@@ -167,3 +174,20 @@ def register_odo_dataframe_edge():
             raise NotImplementedError()
 
         return to_dataframe(el, bind=bind)
+
+    # higher priority than df edge so that
+    # ``odo('select one_column from ...', list)``  returns a list of scalars
+    # instead of a list of tuples of length 1
+    @convert.register(
+        pd.Series,
+        (sa.sql.Select, sa.sql.Selectable),
+        cost=df_cost - 1,
+    )
+    def select_or_selectable_to_series(el, bind=None, dshape=None, **kwargs):
+        bind = getbind(el, bind)
+
+        if istabular(dshape) or bind.dialect.name != 'postgresql':
+            # fall back to the general edge
+            raise NotImplementedError()
+
+        return to_dataframe(el, bind=bind).iloc[:, 0]
