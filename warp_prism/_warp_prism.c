@@ -42,9 +42,23 @@ DEFINE_READ(32)
 DEFINE_READ(64)
 
 #undef DEFINE_READ
-#undef TYPE
 
-typedef void* (*parse_function)(const char * const buffer, size_t len);
+#define DEFINE_WRITE(size)                                              \
+    static inline TYPE(size) write ## size (char* buffer, TYPE(size) value) { \
+        return *((TYPE(size)*) buffer) = value;                         \
+    }
+
+DEFINE_WRITE(8)
+DEFINE_WRITE(16)
+DEFINE_WRITE(32)
+DEFINE_WRITE(64)
+
+#undef TYPE
+#undef DEFINE_WRITE
+
+typedef int (*parse_function)(char* column_buffer,
+                              const char * const input_buffer,
+                              size_t len);
 typedef void (*free_function)(void* colbuffer, size_t rowcount);
 typedef int (*write_null_function)(char* dst, size_t size);
 
@@ -57,55 +71,109 @@ typedef struct {
     PyArray_Descr* dtype;
 } warp_prism_type;
 
-static int64_t parse_int(const char* const buffer, size_t len) {
-    switch(len) {
-    case sizeof(uint8_t):
-        return read8(buffer);
-    case sizeof(uint16_t):
-        return read16(buffer);
-    case sizeof(uint32_t):
-        return read32(buffer);
-    case sizeof(uint64_t):
-        return read64(buffer);
-    default:
-        PyErr_Format(PyExc_ValueError, "unknown int size %zu", len);
-        return 0;
+static int parse_int16(char* column_buffer,
+                       const char* const input_buffer,
+                       size_t len) {
+    if (unlikely(len != sizeof(uint16_t))) {
+        PyErr_Format(PyExc_ValueError, "mismatched int16 size: %zu", len);
+        return -1;
     }
+
+    write16(column_buffer, read16(input_buffer));
+    return 0;
+}
+
+static int parse_int32(char* column_buffer,
+                       const char* const input_buffer,
+                       size_t len) {
+    if (unlikely(len != sizeof(uint32_t))) {
+        PyErr_Format(PyExc_ValueError, "mismatched int32 size: %zu", len);
+        return -1;
+    }
+
+    write32(column_buffer, read32(input_buffer));
+    return 0;
+}
+
+static int parse_int64(char* column_buffer,
+                       const char* const input_buffer,
+                       size_t len) {
+    if (unlikely(len != sizeof(uint64_t))) {
+        PyErr_Format(PyExc_ValueError, "mismatched int64 size: %zu", len);
+        return -1;
+    }
+
+    write64(column_buffer, read64(input_buffer));
+    return 0;
 }
 
 /* 2000-01-01 in us since 1970-01-01 00:00:00+0000 */
 const int64_t datetime_offset = 946684800000000l;
 
-static int64_t parse_datetime(const char* const buffer, size_t len) {
+static int parse_datetime(char* column_buffer,
+                          const char* const input_buffer,
+                          size_t len) {
     if (unlikely(len != sizeof(int64_t))) {
         PyErr_Format(PyExc_ValueError, "unknown datetime size %zu", len);
-        return 0;
+        return -1;
     }
 
-    return read64(buffer) + datetime_offset;
+    write64(column_buffer, read64(input_buffer) + datetime_offset);
+    return 0;
 }
 
-static double parse_float32(const char* const buffer, size_t len) {
+static int parse_float32(char* column_buffer,
+                         const char* const input_buffer,
+                         size_t len) {
     if (unlikely(len != sizeof(float))) {
-        PyErr_Format(PyExc_ValueError, "unknown float size %zu", len);
-        return 0;
+        PyErr_Format(PyExc_ValueError, "unknown float32 size %zu", len);
+        return -1;
     }
 
-    return (float) read32(buffer);
+    write32(column_buffer, read32(input_buffer));
+    return 0;
 }
 
-static double parse_float64(const char* const buffer, size_t len) {
+static int parse_float64(char* column_buffer,
+                         const char* const input_buffer,
+                         size_t len) {
     if (unlikely(len != sizeof(double))) {
-        PyErr_Format(PyExc_ValueError, "unknown float size %zu", len);
-        return 0;
+        PyErr_Format(PyExc_ValueError, "unknown float64 size %zu", len);
+        return -1;
     }
 
-    return (double) read64(buffer);
+    write64(column_buffer, read64(input_buffer));
+    return 0;
 }
 
+static int parse_bool(char* column_buffer,
+                      const char* const input_buffer,
+                      size_t len) {
+    if (unlikely(len != sizeof(uint8_t))) {
+        PyErr_Format(PyExc_ValueError, "mismatched bool size: %zu", len);
+        return -1;
+    }
 
-static PyObject* parse_text(const char* const buffer, size_t len) {
-    return PyUnicode_FromStringAndSize(buffer, len);
+    write8(column_buffer, read8(input_buffer));
+    return 0;
+}
+
+static int parse_text(char* column_buffer,
+                      const char* const input_buffer,
+                      size_t len) {
+    PyObject* value = PyUnicode_FromStringAndSize(input_buffer, len);
+    if (!value) {
+        return -1;
+    }
+#if __SIZEOF_POINTER__ == 8
+    write64(column_buffer, (uint64_t) value);
+#elif __SIZEOF_POINTER__ == 4
+    write32(column_buffer, (uint32_t) value);
+#else
+#error "only 64b and 32b supported"
+#endif
+
+    return 0;
 }
 
 
@@ -139,7 +207,7 @@ static int object_write_null(char* dst, size_t size) {
 
 warp_prism_type int16_type = {
     "int16",
-    (parse_function) parse_int,
+    (parse_function) parse_int16,
     simple_free,
     simple_write_null,
     sizeof(int16_t),
@@ -148,7 +216,7 @@ warp_prism_type int16_type = {
 
 warp_prism_type int32_type = {
     "int32",
-    (parse_function) parse_int,
+    (parse_function) parse_int32,
     simple_free,
     simple_write_null,
     sizeof(uint32_t),
@@ -157,7 +225,7 @@ warp_prism_type int32_type = {
 
 warp_prism_type int64_type = {
     "int64",
-    (parse_function) parse_int,
+    (parse_function) parse_int64,
     simple_free,
     simple_write_null,
     sizeof(int64_t),
@@ -184,7 +252,7 @@ warp_prism_type float64_type = {
 
 warp_prism_type bool_type = {
     "bool",
-    (parse_function) parse_int,
+    (parse_function) parse_bool,
     simple_free,
     simple_write_null,
     sizeof(bool),
@@ -322,32 +390,7 @@ error:
     return -1;
 }
 
-static inline int warp_prism_setitem(const warp_prism_type* type,
-                                     char* rowbuffer,
-                                     size_t ix,
-                                     void* value) {
-    switch(type->size) {
-    case 1:
-        rowbuffer[ix] = (uint8_t) (size_t) value;
-        return 0;
-    case 2:
-        ((uint16_t*) rowbuffer)[ix] = (uint16_t) (size_t) value;
-        return 0;
-    case 4:
-        ((uint32_t*) rowbuffer)[ix] = (uint32_t) (size_t) value;
-        return 0;
-    case 8:
-        ((uint64_t*) rowbuffer)[ix] = (uint64_t) value;
-        return 0;
-    default:
-        PyErr_Format(PyExc_ValueError,
-                     "invalid size to setitem: %zu",
-                     type->size);
-        return -1;
-    }
-}
-
-int warp_prism_read_binary_results(const char* buffer,
+int warp_prism_read_binary_results(const char* input_buffer,
                                    uint16_t const ncolumns,
                                    const warp_prism_type** column_types,
                                    size_t* written_rows,
@@ -358,16 +401,16 @@ int warp_prism_read_binary_results(const char* buffer,
     size_t allocated_rows = starting_column_buffer_length;
     uint32_t extension_area;
 
-    if (strncmp(buffer, signature, signature_len)) {
+    if (strncmp(input_buffer, signature, signature_len)) {
         PyErr_SetString(PyExc_ValueError, "missing postgres signature");
         return -1;
     }
 
     /* advance the cursor through up to the flags segment */
-    buffer += signature_len;
+    input_buffer += signature_len;
 
     /* flags field */
-    flags = consume_32(&buffer);
+    flags = consume_32(&input_buffer);
 
     if (!valid_flags(flags)) {
         PyErr_SetString(PyExc_ValueError, "invalid flags in header");
@@ -375,8 +418,8 @@ int warp_prism_read_binary_results(const char* buffer,
     }
 
     /* skip header extension area */
-    extension_area = consume_32(&buffer);
-    buffer += extension_area;
+    extension_area = consume_32(&input_buffer);
+    input_buffer += extension_area;
     if (extension_area) {
         PyErr_SetString(PyExc_ValueError, "non-zero extension area length");
         return -1;
@@ -386,10 +429,10 @@ int warp_prism_read_binary_results(const char* buffer,
         return -1;
     }
 
-    while ((int16_t) read16(buffer) != -1) {
+    while ((int16_t) read16(input_buffer) != -1) {
         uint16_t field_count;
 
-        if ((field_count = consume_16(&buffer)) != ncolumns) {
+        if ((field_count = consume_16(&input_buffer)) != ncolumns) {
             free_outarrays(ncolumns,
                            allocated_rows,
                            column_types,
@@ -403,7 +446,7 @@ int warp_prism_read_binary_results(const char* buffer,
         }
 
         if (have_oids(flags)) {
-            buffer += consume_32(&buffer);
+            consume_32(&input_buffer);
         }
 
         if (row_count++ == allocated_rows) {
@@ -418,14 +461,12 @@ int warp_prism_read_binary_results(const char* buffer,
 
         for (uint_fast16_t n = 0; n < ncolumns; ++n) {
             const warp_prism_type* column_type = column_types[n];
-            int32_t datalen = consume_32(&buffer);
+            int32_t datalen = consume_32(&input_buffer);
             size_t row_ix = row_count - 1;
-            void* parsed;
+            char* column_buffer = &outarrays[n][row_ix * column_type->size];
 
             if (!(outmasks[n][row_ix] = (datalen != -1))) {
-                char* dst = &outarrays[n][row_ix * column_type->size];
-
-                if (column_type->write_null(dst, column_type->size)) {
+                if (column_type->write_null(column_buffer, column_type->size)) {
                     free_outarrays(ncolumns,
                                    allocated_rows,
                                    column_types,
@@ -438,20 +479,7 @@ int warp_prism_read_binary_results(const char* buffer,
                 continue;
             }
 
-            if (!(parsed = column_type->parse(buffer, datalen))) {
-                if (PyErr_Occurred()) {
-                    free_outarrays(ncolumns,
-                                   allocated_rows,
-                                   column_types,
-                                   outarrays,
-                                   outmasks);
-                    return -1;
-                }
-            }
-            if (warp_prism_setitem(column_type,
-                                   outarrays[n],
-                                   row_ix,
-                                   parsed)) {
+            if (column_type->parse(column_buffer, input_buffer, datalen)) {
                 free_outarrays(ncolumns,
                                allocated_rows,
                                column_types,
@@ -459,7 +487,7 @@ int warp_prism_read_binary_results(const char* buffer,
                                outmasks);
                 return -1;
             }
-            buffer += datalen;
+            input_buffer += datalen;
         }
     }
     *written_rows = row_count;
