@@ -145,11 +145,11 @@ null_values = keymap(np.dtype, {
 _default_null_values_for_type = null_values
 
 
-def to_dataframe(query, *, bind=None, null_values={}):
+def to_dataframe(query, *, bind=None, null_values=None):
     """Run the query returning a the results as a pd.DataFrame.
 
     Parameters
-x    ----------
+    ----------
     query : sa.sql.Selectable
         The query to run. This can be a select or a table.
     bind : sa.Engine, optional
@@ -167,6 +167,9 @@ x    ----------
         query.
     """
     arrays = to_arrays(query, bind=bind)
+
+    if null_values is None:
+        null_values = {}
 
     for name, (array, mask) in arrays.items():
         if array.dtype.kind == 'i':
