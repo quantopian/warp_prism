@@ -3,26 +3,21 @@ from io import BytesIO
 from datashape import discover
 from datashape.predicates import istabular
 import numpy as np
-from odo.backends.sql import getbind
 import pandas as pd
 import sqlalchemy as sa
 from sqlalchemy.ext.compiler import compiles
 from toolz import keymap
 
-from ._warp_prism import to_arrays as _raw_to_arrays, typeid_map as _typeid_map
+from ._warp_prism import (
+    to_arrays as _raw_to_arrays,
+    typeid_map as _raw_typeid_map,
+)
 
 
 __version__ = '0.1.0'
 
-typeid_map = keymap(np.dtype, _typeid_map)
-null_values = keymap(np.dtype, {
-    'float32': np.nan,
-    'float64': np.nan,
-    'int32': np.nan,
-    'int64': np.nan,
-    'datetime64[ns]': np.datetime64('nat', 'ns'),
-    'object': None,
-})
+
+_typeid_map = keymap(np.dtype, _raw_typeid_map)
 
 
 class _CopyToBinary(sa.sql.expression.Executable, sa.sql.ClauseElement):
@@ -72,11 +67,35 @@ def _compile_copy_to_binary_postgres(element, compiler, **kwargs):
 def _warp_prism_types(query):
     for name, dtype in discover(query).measure.fields:
         try:
-            yield typeid_map[getattr(dtype, 'ty', dtype).to_numpy_dtype()]
+            yield _typeid_map[getattr(dtype, 'ty', dtype).to_numpy_dtype()]
         except KeyError:
             raise TypeError(
                 'warp_prism cannot query columns of type %s' % dtype,
             )
+
+
+def _getbind(selectable, bind):
+    """Return an explicitly passed connection or infer the connection from
+    the selectable.
+
+    Parameters
+    ----------
+    selectable : sa.sql.Selectable
+        The selectable object being queried.
+    bind : bind or None
+        The explicit connection or engine to use to execute the query.
+
+    Returns
+    -------
+    bind : The bind which should be used to execute the query.
+    """
+    if bind is None:
+        return selectable.bind
+
+    if isinstance(bind, sa.engine.base.Engine):
+        return bind
+
+    return sa.create_engine(bind)
 
 
 def to_arrays(query, bind=None):
@@ -101,7 +120,7 @@ def to_arrays(query, bind=None):
     types = tuple(_warp_prism_types(query))
 
     buf = BytesIO()
-    bind = getbind(query, bind)
+    bind = _getbind(query, bind)
 
     stmt = _CopyToBinary(query, bind)
     with bind.connect() as conn:
@@ -111,16 +130,34 @@ def to_arrays(query, bind=None):
     return {column_names[n]: v for n, v in enumerate(out)}
 
 
-def to_dataframe(query, bind=None):
+null_values = keymap(np.dtype, {
+    'float32': np.nan,
+    'float64': np.nan,
+    'int16': np.nan,
+    'int32': np.nan,
+    'int64': np.nan,
+    'bool': np.nan,
+    'datetime64[ns]': np.datetime64('nat', 'ns'),
+    'object': None,
+})
+
+# alias because ``to_dataframe`` shadows this name
+_default_null_values_for_type = null_values
+
+
+def to_dataframe(query, *, bind=None, null_values={}):
     """Run the query returning a the results as a pd.DataFrame.
 
     Parameters
-    ----------
+x    ----------
     query : sa.sql.Selectable
         The query to run. This can be a select or a table.
     bind : sa.Engine, optional
         The engine used to create the connection. If not provided
         ``query.bind`` will be used.
+    null_values : dict[str, any]
+        The null values to use for each column. This falls back to
+        ``warp_prism.null_values`` for columns that are not specified.
 
     Returns
     -------
@@ -130,18 +167,32 @@ def to_dataframe(query, bind=None):
         query.
     """
     arrays = to_arrays(query, bind=bind)
+
     for name, (array, mask) in arrays.items():
         if array.dtype.kind == 'i':
             if not mask.all():
-                array = array.astype('float64')
-                array[~mask] = null_values[array.dtype]
+                try:
+                    null = null_values[name]
+                except KeyError:
+                    # no explicit override, cast to float and use NaN as null
+                    array = array.astype('float64')
+                    null = np.nan
+
+                array[~mask] = null
+
             arrays[name] = array
             continue
 
         if array.dtype.kind == 'M':
+            # pandas needs datetime64[ns] instead of datetime64[us]
             array = array.astype('datetime64[ns]')
 
-        array[~mask] = null_values[array.dtype]
+        try:
+            null = null_values[name]
+        except KeyError:
+            null = _default_null_values_for_type[array.dtype]
+
+        array[~mask] = null
         arrays[name] = array
 
     return pd.DataFrame(arrays, columns=[column.name for column in query.c])
@@ -156,6 +207,7 @@ def register_odo_dataframe_edge():
     If the selectable is not in a postgres database, it will fallback to the
     default odo edge.
     """
+    # defer imports to make this an optional dependency
     from odo import convert
 
     # estimating 8 times faster
@@ -167,7 +219,7 @@ def register_odo_dataframe_edge():
         cost=df_cost,
     )
     def select_or_selectable_to_frame(el, bind=None, dshape=None, **kwargs):
-        bind = getbind(el, bind)
+        bind = _getbind(el, bind)
 
         if bind.dialect.name != 'postgresql':
             # fall back to the general edge
@@ -184,7 +236,7 @@ def register_odo_dataframe_edge():
         cost=df_cost - 1,
     )
     def select_or_selectable_to_series(el, bind=None, dshape=None, **kwargs):
-        bind = getbind(el, bind)
+        bind = _getbind(el, bind)
 
         if istabular(dshape) or bind.dialect.name != 'postgresql':
             # fall back to the general edge
