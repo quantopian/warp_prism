@@ -514,8 +514,7 @@ static void free_mcapsule(PyObject* capsule) {
 }
 
 static PyObject* warp_prism_to_arrays(PyObject* self __attribute__((unused)),
-                                      PyObject* args,
-                                      PyObject* kwargs) {
+                                      PyObject* args) {
     Py_buffer view;
     PyObject* pytypeids;
     Py_ssize_t ncolumns;
@@ -529,11 +528,6 @@ static PyObject* warp_prism_to_arrays(PyObject* self __attribute__((unused)),
     if (PyTuple_GET_SIZE(args) != 2) {
         PyErr_SetString(PyExc_TypeError,
                         "expected exactly 2 arguments (buffer, type_ids)");
-        return NULL;
-    }
-
-    if (kwargs) {
-        PyErr_SetString(PyExc_TypeError, "no kwargs");
         return NULL;
     }
 
