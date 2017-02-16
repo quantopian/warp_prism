@@ -72,9 +72,9 @@ Comparisons
 A quick comparison between ``warp_prism``, ``odo``, and ``pd.read_sql_table``.
 
 In this example we will read real data for VIX from quandl stored in a local
-postgres database using ``warp_prism``, ``odo``, and ``pd.read_sql_table``.  After
-that, we will use ``odo`` to create a table with two float columns and 1000000
-rows and query it with the tree tools again.
+postgres database using ``warp_prism``, ``odo``, and ``pd.read_sql_table``.
+After that, we will use ``odo`` to create a table with two float columns and
+1000000 rows and query it with the tree tools again.
 
 .. code-block:: python
 
