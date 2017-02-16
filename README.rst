@@ -29,8 +29,8 @@ API
        where the mask is False are 0 interpreted by the type.
 
 
-``to_dataframe(query, bind=None)``
-``````````````````````````````````
+``to_dataframe(query, *, bind=None, null_values=None)``
+```````````````````````````````````````````````````````
 
 .. code-block::
 
@@ -43,6 +43,9 @@ API
    bind : sa.Engine, optional
        The engine used to create the connection. If not provided
        ``query.bind`` will be used.
+   null_values : dict[str, any]
+       The null values to use for each column. This falls back to
+       ``warp_prism.null_values`` for columns that are not specified.
 
    Returns
    -------
