@@ -43,10 +43,12 @@ setup(
     ],
     install_requires=[
         'numpy',
-        'odo',
         'pandas',
         'sqlalchemy',
         'psycopg2',
         'toolz',
     ],
+    extras_require={
+        'odo': ['odo'],
+    },
 )
