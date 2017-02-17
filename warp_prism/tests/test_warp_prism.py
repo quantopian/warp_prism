@@ -3,7 +3,7 @@ from string import ascii_letters
 from uuid import uuid4
 import warnings
 
-from datashape import var, R, Option
+from datashape import var, R, Option, dshape
 import numpy as np
 from odo import resource, odo
 import pandas as pd
@@ -162,12 +162,23 @@ def test_datetime_type_nonnull(tmp_table_uri):
     check_roundtrip_nonnull(tmp_table_uri, data, 'datetime', sa.DateTime)
 
 
+def test_date_type_nonnull(tmp_table_uri):
+    data = np.arange(
+        '2000',
+        '2016',
+        dtype='datetime64[D]',
+    )
+    check_roundtrip_nonnull(tmp_table_uri, data, 'date', sa.Date)
+
+
 def check_roundtrip_null_values(table_uri,
                                 data,
                                 dtype,
                                 sqltype,
                                 null_values,
-                                mask):
+                                mask,
+                                *,
+                                astype=False):
     """Check the data roundtrip through postgres using warp_prism to read the
     data
 
@@ -182,7 +193,10 @@ def check_roundtrip_null_values(table_uri,
     sqltype : type
         The sqlalchemy type of the data.
     null_values : dict[str, any]
-       The value to coerce ``NULL`` to.
+        The value to coerce ``NULL`` to.
+    astype : bool, optional
+        Coerce the input data to the given dtype before making assertions about
+        the output data.
     """
     table = resource(table_uri, dshape=var * R['a': Option(dtype)])
     assert table.columns.keys() == ['a']
@@ -196,6 +210,8 @@ def check_roundtrip_null_values(table_uri,
     assert (array[mask] == data[mask]).all()
 
     output_dataframe = to_dataframe(table, null_values=null_values)
+    if astype:
+        data = data.astype(dshape(dtype).measure.to_numpy_dtype())
     expected_dataframe = pd.DataFrame({'a': data})
     expected_dataframe[~mask] = null_values.get(
         'a',
@@ -212,7 +228,14 @@ def check_roundtrip_null_values(table_uri,
     )
 
 
-def check_roundtrip_null(table_uri, data, dtype, sqltype, null, mask):
+def check_roundtrip_null(table_uri,
+                         data,
+                         dtype,
+                         sqltype,
+                         null,
+                         mask,
+                         *,
+                         astype=False):
     """Check the data roundtrip through postgres using warp_prism to read the
     data
 
@@ -227,7 +250,10 @@ def check_roundtrip_null(table_uri, data, dtype, sqltype, null, mask):
     sqltype : type
         The sqlalchemy type of the data.
     null : any
-       The value to coerce ``NULL`` to.
+        The value to coerce ``NULL`` to.
+    astype : bool, optional
+        Coerce the input data to the given dtype before making assertions about
+        the output data.
     """
     check_roundtrip_null_values(
         table_uri,
@@ -236,6 +262,7 @@ def check_roundtrip_null(table_uri, data, dtype, sqltype, null, mask):
         sqltype,
         {'a': null},
         mask,
+        astype=astype,
     )
 
 
@@ -308,4 +335,23 @@ def test_datetime_type_null(tmp_table_uri):
         sa.DateTime,
         np.datetime64('1995-12-13', 'ns'),
         mask,
+    )
+
+
+def test_date_type_null(tmp_table_uri):
+    data = np.arange(
+        '2000',
+        '2016',
+        dtype='datetime64[D]',
+    ).astype(object)
+    mask = np.tile(np.array([True, False]), len(data) // 2)
+    data[~mask] = None
+    check_roundtrip_null(
+        tmp_table_uri,
+        data,
+        'date',
+        sa.Date,
+        np.datetime64('1995-12-13', 'ns'),
+        mask,
+        astype=True,
     )
