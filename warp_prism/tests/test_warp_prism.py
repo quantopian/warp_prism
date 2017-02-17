@@ -112,6 +112,8 @@ def check_roundtrip_nonnull(table_uri, data, dtype, sqltype):
     """
     input_dataframe = pd.DataFrame({'a': data})
     table = odo(input_dataframe, table_uri, dshape=var * R['a': dtype])
+    # Ensure that odo created the table correctly. If these fail the other
+    # tests are not well defined.
     assert table.columns.keys() == ['a']
     assert isinstance(table.columns['a'].type, sqltype)
 
@@ -122,7 +124,7 @@ def check_roundtrip_nonnull(table_uri, data, dtype, sqltype):
     assert mask.all()
 
     output_dataframe = to_dataframe(table)
-    assert (output_dataframe == input_dataframe).all().all()
+    pd.util.testing.assert_frame_equal(output_dataframe, input_dataframe)
 
 
 @pytest.mark.parametrize('dtype,sqltype,start,stop,step', (
@@ -199,6 +201,8 @@ def check_roundtrip_null_values(table_uri,
         the output data.
     """
     table = resource(table_uri, dshape=var * R['a': Option(dtype)])
+    # Ensure that odo created the table correctly. If these fail the other
+    # tests are not well defined.
     assert table.columns.keys() == ['a']
     assert isinstance(table.columns['a'].type, sqltype)
     table.insert().values([{'a': v} for v in data]).execute()
