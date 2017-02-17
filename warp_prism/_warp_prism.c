@@ -107,7 +107,8 @@ static int parse_int64(char* column_buffer,
     return 0;
 }
 
-/* 2000-01-01 in us since 1970-01-01 00:00:00+0000 */
+/* 2000-01-01 in us since 1970-01-01 00:00:00+0000
+   postgres stores datetimes as us since jan 1 2000 *not* jan 1 1970 */
 const int64_t datetime_offset = 946684800000000l;
 
 static int parse_datetime(char* column_buffer,
@@ -122,7 +123,8 @@ static int parse_datetime(char* column_buffer,
     return 0;
 }
 
-/* 2000-01-01 in days since 1970-01-01 */
+/* 2000-01-01 in days since 1970-01-01;
+   postgres stores date as days since jan 1 2000 *not* jan 1 1970 */
 const int32_t date_offset = 10957;
 
 static int parse_date(char* column_buffer,
