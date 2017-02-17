@@ -187,7 +187,7 @@ def to_dataframe(query, *, bind=None, null_values=None):
             continue
 
         if array.dtype.kind == 'M':
-            # pandas needs datetime64[ns] instead of datetime64[us]
+            # pandas needs datetime64[ns], not ``us`` or ``D``
             array = array.astype('datetime64[ns]')
 
         try:
