@@ -195,7 +195,6 @@ static int parse_text(char* column_buffer,
     return 0;
 }
 
-
 static void simple_free(void* colbuffer,
                         size_t rowcount __attribute__((unused))) {
     PyMem_Free(colbuffer);
