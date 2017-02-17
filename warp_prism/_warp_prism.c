@@ -203,6 +203,7 @@ static void free_object(PyObject** colbuffer, size_t rowcount) {
     for (size_t n = 0; n < rowcount; ++n) {
         Py_XDECREF(colbuffer[n]);
     }
+    PyMem_Free(colbuffer);
 }
 
 static int simple_write_null(char* dst, size_t size) {
