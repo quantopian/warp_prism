@@ -122,6 +122,23 @@ static int parse_datetime(char* column_buffer,
     return 0;
 }
 
+/* 2000-01-01 in days since 1970-01-01 */
+const int32_t date_offset = 10957;
+
+static int parse_date(char* column_buffer,
+                      const char* const input_buffer,
+                      size_t len) {
+    if (unlikely(len != sizeof(int32_t))) {
+        PyErr_Format(PyExc_ValueError, "unknown date size %zu", len);
+        return -1;
+    }
+
+    /* We read 32 bits of data and but write it as 64 bits; postgres uses 32 bit
+       integers for dates but numpy datetime64[D] uses 64. */
+    write64(column_buffer, read32(input_buffer) + date_offset);
+    return 0;
+}
+
 static int parse_float32(char* column_buffer,
                          const char* const input_buffer,
                          size_t len) {
@@ -193,11 +210,24 @@ static int simple_write_null(char* dst, size_t size) {
     return 0;
 }
 
+static int datetime_write_null(char* dst, size_t size) {
+    if (size != sizeof(int64_t)) {
+        PyErr_Format(PyExc_ValueError,
+                     "wrong size for NULL datetime field: %zu, expected %zu",
+                     size,
+                     sizeof(int64_t));
+        return -1;
+    }
+    *(int64_t*) dst = NPY_DATETIME_NAT;
+    return 0;
+}
+
 static int object_write_null(char* dst, size_t size) {
     if (size != sizeof(PyObject*)) {
         PyErr_Format(PyExc_ValueError,
-                     "wrong size for NULL object field: %zu",
-                     size);
+                     "wrong size for NULL object field: %zu, expected %zu",
+                     size,
+                     sizeof(PyObject*));
         return -1;
     }
     Py_INCREF(Py_None);
@@ -272,7 +302,16 @@ warp_prism_type datetime_type = {
     "datetime64[us]",
     (parse_function) parse_datetime,
     simple_free,
-    simple_write_null,
+    datetime_write_null,
+    sizeof(int64_t),
+    NULL,
+};
+
+warp_prism_type date_type = {
+    "datetime64[D]",
+    (parse_function) parse_date,
+    simple_free,
+    datetime_write_null,
     sizeof(int64_t),
     NULL,
 };
@@ -286,6 +325,7 @@ const warp_prism_type* typeids[] = {
     &bool_type,
     &string_type,
     &datetime_type,
+    &date_type,
 };
 
 const size_t max_typeid = sizeof(typeids) / sizeof(warp_prism_type*);
