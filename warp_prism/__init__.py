@@ -3,6 +3,7 @@ from io import BytesIO
 from datashape import discover
 from datashape.predicates import istabular
 import numpy as np
+from odo import convert
 import pandas as pd
 import sqlalchemy as sa
 from sqlalchemy.ext.compiler import compiles
@@ -210,9 +211,6 @@ def register_odo_dataframe_edge():
     If the selectable is not in a postgres database, it will fallback to the
     default odo edge.
     """
-    # defer imports to make this an optional dependency
-    from odo import convert
-
     # estimating 8 times faster
     df_cost = convert.graph.edge[sa.sql.Select][pd.DataFrame]['cost'] / 8
 

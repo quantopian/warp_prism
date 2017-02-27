@@ -48,9 +48,7 @@ setup(
         'pandas',
         'sqlalchemy',
         'psycopg2',
+        'odo',
         'toolz',
     ],
-    extras_require={
-        'odo': ['odo'],
-    },
 )
