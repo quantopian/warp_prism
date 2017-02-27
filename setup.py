@@ -43,6 +43,7 @@ setup(
         ),
     ],
     install_requires=[
+        'datashape',
         'numpy',
         'pandas',
         'sqlalchemy',
