@@ -19,6 +19,7 @@ __version__ = '0.1.0'
 
 
 _typeid_map = keymap(np.dtype, _raw_typeid_map)
+_object_type_id = _raw_typeid_map['object']
 
 
 class _CopyToBinary(sa.sql.expression.Executable, sa.sql.ClauseElement):
@@ -68,7 +69,11 @@ def _compile_copy_to_binary_postgres(element, compiler, **kwargs):
 def _warp_prism_types(query):
     for name, dtype in discover(query).measure.fields:
         try:
-            yield _typeid_map[getattr(dtype, 'ty', dtype).to_numpy_dtype()]
+            np_dtype = getattr(dtype, 'ty', dtype).to_numpy_dtype()
+            if np_dtype.kind == 'U':
+                yield _object_type_id
+            else:
+                yield _typeid_map[np_dtype]
         except KeyError:
             raise TypeError(
                 'warp_prism cannot query columns of type %s' % dtype,
