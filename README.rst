@@ -6,8 +6,8 @@ Quickly move data from postgres to numpy or pandas.
 API
 ---
 
-``to_arrays(query, bind=None)``
-```````````````````````````````
+``to_arrays(query, *, bind=None)``
+``````````````````````````````````
 
 .. code-block::
 
