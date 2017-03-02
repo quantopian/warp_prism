@@ -104,7 +104,7 @@ def _getbind(selectable, bind):
     return sa.create_engine(bind)
 
 
-def to_arrays(query, bind=None):
+def to_arrays(query, *, bind=None):
     """Run the query returning a the results as np.ndarrays.
 
     Parameters
