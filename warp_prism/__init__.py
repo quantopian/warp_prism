@@ -15,7 +15,7 @@ from ._warp_prism import (
 )
 
 
-__version__ = '0.1.0'
+__version__ = '0.1.1'
 
 
 _typeid_map = keymap(np.dtype, _raw_typeid_map)

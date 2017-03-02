@@ -11,7 +11,7 @@ if 'upload' in sys.argv:
         long_description = f.read()
 
 classifiers = [
-    'Development Status :: 3 - Alpha',
+    'Development Status :: 5 - Production/Stable',
     'Intended Audience :: Developers',
     'Intended Audience :: Science/Research',
     'License :: OSI Approved :: Apache Software License',
@@ -24,7 +24,7 @@ classifiers = [
 
 setup(
     name='warp_prism',
-    version='0.1.0',
+    version='0.1.1',
     description='Quickly move data from postgres to numpy or pandas.',
     author='Quantopian Inc.',
     author_email='opensource@gmail.com',
@@ -50,7 +50,7 @@ setup(
         'odo',
         'toolz',
     ],
-    extra_requires={
+    extras_require={
         'dev': [
             'flake8==3.3.0',
             'pycodestyle==2.3.1',
