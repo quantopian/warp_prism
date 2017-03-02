@@ -17,7 +17,6 @@ classifiers = [
     'License :: OSI Approved :: Apache Software License',
     'Natural Language :: English',
     'Programming Language :: C',
-    'Programming Language :: Python :: 2',
     'Programming Language :: Python :: 3',
     'Programming Language :: Python :: Implementation :: CPython',
     'Topic :: Scientific/Engineering',
@@ -51,4 +50,12 @@ setup(
         'odo',
         'toolz',
     ],
+    extra_requires={
+        'dev': [
+            'flake8==3.3.0',
+            'pycodestyle==2.3.1',
+            'pyflakes==1.5.0',
+            'pytest==3.0.6',
+        ],
+    },
 )
