@@ -7,7 +7,7 @@ API
 ---
 
 ``to_arrays(query, bind=None)``
-``````````````````````````````
+```````````````````````````````
 
 .. code-block::
 
@@ -168,3 +168,25 @@ After that, we will use ``odo`` to create a table with two float columns and
 
    In [15]: %timeit pd.read_sql_table(big_table.name, big_table.bind)
    1 loop, best of 3: 1.9 s per loop
+
+
+Installation
+------------
+
+Warp Prism can be pip installed but requires numpy to build its C extensions:
+
+.. code-block::
+
+   $ pip install numpy
+   $ pip install warp_prism
+
+
+License
+-------
+
+Warp Prism is licensed under the Apache 2.0.
+
+Warp Prism is sponsored by `Quantopian <https://www.quantopian.com>`_ where it
+is used to fetch data for use in `Zipline <http://www.zipline.io/>`_ through the
+`Pipeline API <https://www.quantopian.com/tutorials/pipeline>`_ or interactively
+with `Blaze <http://blaze.readthedocs.io/en/latest/index.html>`_.
