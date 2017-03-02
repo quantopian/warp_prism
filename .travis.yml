@@ -1,0 +1,16 @@
+language: python
+sudo: false
+python:
+  - "3.4"
+  - "3.5"
+  - "3.6"
+
+addons:
+  postgresql: "9.5"
+
+before_script:
+  - pip install numpy
+  - pip install -e .[dev]
+
+script:
+  - py.test warp_prism
