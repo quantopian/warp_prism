@@ -202,7 +202,7 @@ static void simple_free(void* colbuffer,
 
 static void free_object(PyObject** colbuffer, size_t rowcount) {
     for (size_t n = 0; n < rowcount; ++n) {
-        Py_XDECREF(colbuffer[n]);
+        Py_DECREF(colbuffer[n]);
     }
     PyMem_Free(colbuffer);
 }
