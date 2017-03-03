@@ -61,3 +61,5 @@ benchmarks.db
 .cache
 
 .dir-locals.el
+
+TAGS
