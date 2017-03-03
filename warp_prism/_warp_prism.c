@@ -181,17 +181,11 @@ static int parse_text(char* column_buffer,
                       const char* const input_buffer,
                       size_t len) {
     PyObject* value = PyUnicode_FromStringAndSize(input_buffer, len);
-    if (!value) {
+    if (unlikely(!value)) {
         return -1;
     }
-#if __SIZEOF_POINTER__ == 8
-    write64(column_buffer, (uint64_t) value);
-#elif __SIZEOF_POINTER__ == 4
-    write32(column_buffer, (uint32_t) value);
-#else
-#error "only 64b and 32b supported"
-#endif
 
+    *(PyObject**) column_buffer = value;
     return 0;
 }
 
@@ -204,6 +198,7 @@ static void free_object(PyObject** colbuffer, size_t rowcount) {
     for (size_t n = 0; n < rowcount; ++n) {
         Py_DECREF(colbuffer[n]);
     }
+
     PyMem_Free(colbuffer);
 }
 
@@ -220,7 +215,8 @@ static int datetime_write_null(char* dst, size_t size) {
                      sizeof(int64_t));
         return -1;
     }
-    *(int64_t*) dst = NPY_DATETIME_NAT;
+
+    write64(dst, NPY_DATETIME_NAT);
     return 0;
 }
 
@@ -232,6 +228,7 @@ static int object_write_null(char* dst, size_t size) {
                      sizeof(PyObject*));
         return -1;
     }
+
     Py_INCREF(Py_None);
     *(PyObject**) dst = Py_None;
     return 0;
