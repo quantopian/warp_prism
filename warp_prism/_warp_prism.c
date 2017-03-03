@@ -476,7 +476,7 @@ int warp_prism_read_binary_results(const char* input_buffer,
 
         if ((field_count = consume_16(&input_buffer)) != ncolumns) {
             free_outarrays(ncolumns,
-                           allocated_rows,
+                           row_count,
                            column_types,
                            outarrays,
                            outmasks);
@@ -509,8 +509,10 @@ int warp_prism_read_binary_results(const char* input_buffer,
 
             if (!(outmasks[n][row_ix] = (datalen != -1))) {
                 if (column_type->write_null(column_buffer, column_type->size)) {
+                    /* we failed to write at row_ix so we only free up to
+                       row_count - 1 */
                     free_outarrays(ncolumns,
-                                   allocated_rows,
+                                   row_count - 1,
                                    column_types,
                                    outarrays,
                                    outmasks);
@@ -522,8 +524,10 @@ int warp_prism_read_binary_results(const char* input_buffer,
             }
 
             if (column_type->parse(column_buffer, input_buffer, datalen)) {
+                /* we failed to write at row_ix so we only free up to
+                   row_count - 1 */
                 free_outarrays(ncolumns,
-                               allocated_rows,
+                               row_count - 1,
                                column_types,
                                outarrays,
                                outmasks);
