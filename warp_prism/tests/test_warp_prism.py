@@ -1,7 +1,6 @@
-from contextlib import contextmanager
 from string import ascii_letters
+import struct
 from uuid import uuid4
-import warnings
 
 from datashape import var, R, Option, dshape
 import numpy as np
@@ -10,84 +9,20 @@ import pandas as pd
 import pytest
 import sqlalchemy as sa
 
+from warp_prism._warp_prism import postgres_signature, raw_to_arrays
 from warp_prism import (
     to_arrays,
     to_dataframe,
     null_values as null_values_for_type,
+    _typeid_map,
 )
-
-
-def _dropdb(root_conn, db_name):
-    root_conn.execute('COMMIT')
-    root_conn.execute('DROP DATABASE %s' % db_name)
-
-
-@contextmanager
-def disposable_engine(uri):
-    """An engine which is disposed on exit.
-
-    Parameters
-    ----------
-    uri : str
-        The uri to the db.
-
-    Yields
-    ------
-    engine : sa.engine.Engine
-    """
-    engine = resource(uri)
-    try:
-        yield engine
-    finally:
-        engine.dispose()
-
-
-_pg_stat_activity = sa.Table(
-    'pg_stat_activity',
-    sa.MetaData(),
-    sa.Column('pid', sa.Integer),
-)
+from warp_prism.tests import tmp_db_uri as tmp_db_uri_ctx
 
 
 @pytest.fixture(scope='module')
 def tmp_db_uri():
-    """Create a temporary postgres database to run the tests against.
-    """
-    db_name = '_warp_prism_test_' + uuid4().hex
-    root = 'postgresql://localhost/'
-    uri = root + db_name
-    with disposable_engine(root + 'postgres') as e, e.connect() as root_conn:
-        root_conn.execute('COMMIT')
-        root_conn.execute('CREATE DATABASE %s' % db_name)
-        try:
-            yield uri
-        finally:
-            resource(uri).dispose()
-            try:
-                _dropdb(root_conn, db_name)
-            except sa.exc.OperationalError:
-                # We couldn't drop the db. The most likely cause is that there
-                # are active queries. Even more likely is that these are
-                # rollbacks because there was an exception somewhere inside the
-                # tests. We will cancel all the running queries and try to drop
-                # the database again.
-                pid = _pg_stat_activity.c.pid
-                root_conn.execute(
-                    sa.select(
-                        (sa.func.pg_terminate_backend(pid),),
-                    ).where(
-                        pid != sa.func.pg_backend_pid(),
-                    )
-                )
-                try:
-                    _dropdb(root_conn, db_name)
-                except sa.exc.OperationalError:  # pragma: no cover
-                    # The database STILL wasn't cleaned up. Just tell the user
-                    # to deal with this manually.
-                    warnings.warn(
-                        "leaking database '%s', please manually delete this" %
-                        db_name,
-                    )
+    with tmp_db_uri_ctx() as db_uri:
+        yield db_uri
 
 
 @pytest.fixture
@@ -358,4 +293,157 @@ def test_date_type_null(tmp_table_uri):
         np.datetime64('1995-12-13', 'ns'),
         mask,
         astype=True,
+    )
+
+
+def _pack_as_invalid_size_postgres_binary_data(char, itemsize, value):
+    """Create mock postgres data for testing the column data size checks.
+
+    Parameters
+    ----------
+    char : str
+        The format char for struct.
+    value : any
+        The value to pack, this will appear twice.
+
+    Returns
+    -------
+    binary_data : bytes
+        The binary data to feed to raw_to_arrays.
+    """
+    return postgres_signature + struct.pack(
+        '>iihi{char}hi{char}'.format(char=char),
+        0,  # flags
+        0,  # extension area size
+        1,  # field_count
+        itemsize,  # data_size
+        value,
+        1,  # field_count
+        itemsize - 1,  # incorrect size for the given type
+        value,  # default value of the given type
+    )
+
+
+@pytest.mark.parametrize('dtype', map(np.dtype, (
+    'bool',
+    'int16',
+    'int32',
+    'float32',
+    'float64',
+)))
+def test_invalid_numeric_size(dtype):
+    input_data = _pack_as_invalid_size_postgres_binary_data(
+        dtype.char,
+        dtype.itemsize,
+        dtype.type(),
+    )
+
+    with pytest.raises(ValueError) as e:
+        raw_to_arrays(input_data, (_typeid_map[dtype],))
+
+    assert str(e.value) == 'mismatched %s size: %s' % (
+        dtype.name,
+        dtype.itemsize - 1,
+    )
+
+
+# timedelta to adjust a numpy datetime into a postgres datetime
+_epoch_offset = np.datetime64('2000-01-01') - np.datetime64('1970-01-01')
+
+
+def test_invalid_datetime_size():
+    input_data = _pack_as_invalid_size_postgres_binary_data(
+        'q',  # int64_t (quadword)
+        8,
+        (np.datetime64('2014-01-01', 'us') + _epoch_offset).view('int64'),
+    )
+
+    dtype = np.dtype('datetime64[us]')
+    with pytest.raises(ValueError) as e:
+        raw_to_arrays(input_data, (_typeid_map[dtype],))
+
+    assert str(e.value) == 'mismatched datetime size: 7'
+
+
+def test_invalid_date_size():
+    input_data = _pack_as_invalid_size_postgres_binary_data(
+        'i',  # int32_t
+        4,
+        (np.datetime64('2014-01-01', 'D') + _epoch_offset).view('int64'),
+    )
+
+    dtype = np.dtype('datetime64[D]')
+    with pytest.raises(ValueError) as e:
+        raw_to_arrays(input_data, (_typeid_map[dtype],))
+
+    assert str(e.value) == 'mismatched date size: 3'
+
+
+def test_invalid_text():
+    input_data = postgres_signature + struct.pack(
+        '>iihi1si1shi{}si1s'.format(len(postgres_signature)),
+        0,  # flags
+        0,  # extension area size
+
+        # row 0
+        2,  # field_count
+        1,  # data_size
+        b'\0',
+        1,  # data_size
+        b'\0',
+
+        # row 1
+        2,  # field_count
+        len(postgres_signature) + 1,  # data_size
+        postgres_signature + b'\0',  # postgres signature is invalid unicode
+        1,  # data_size
+        b'\1',
+    )
+    # we put the invalid unicode as the first column to test that we can clean
+    # up the cell in the second column before we have written a string there
+
+    str_typeid = _typeid_map[np.dtype(object)]
+    with pytest.raises(UnicodeDecodeError):
+        raw_to_arrays(input_data, (str_typeid, str_typeid))
+
+
+def test_missing_signature():
+    input_data = b''
+
+    with pytest.raises(ValueError) as e:
+        raw_to_arrays(input_data, ())
+
+    assert str(e.value) == 'missing postgres signature'
+
+
+def test_missing_flags():
+    input_data = postgres_signature
+
+    with pytest.raises(ValueError) as e:
+        raw_to_arrays(input_data, ())
+
+    assert (
+        str(e.value) == 'reading 4 bytes would cause an out of bounds access'
+    )
+
+
+def test_missing_extension_length():
+    input_data = postgres_signature + (0).to_bytes(4, 'big')
+
+    with pytest.raises(ValueError) as e:
+        raw_to_arrays(input_data, ())
+
+    assert (
+        str(e.value) == 'reading 4 bytes would cause an out of bounds access'
+    )
+
+
+def test_missing_end_marker():
+    input_data = postgres_signature + (0).to_bytes(4, 'big')
+
+    with pytest.raises(ValueError) as e:
+        raw_to_arrays(input_data, ())
+
+    assert (
+        str(e.value) == 'reading 4 bytes would cause an out of bounds access'
     )
