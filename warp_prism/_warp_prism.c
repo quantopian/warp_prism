@@ -196,7 +196,7 @@ static void simple_free(void* colbuffer,
 
 static void free_object(PyObject** colbuffer, size_t rowcount) {
     for (size_t n = 0; n < rowcount; ++n) {
-        Py_DECREF(colbuffer[n]);
+        Py_XDECREF(colbuffer[n]);
     }
 
     PyMem_Free(colbuffer);
@@ -337,16 +337,61 @@ static inline bool valid_flags(uint32_t flags) {
     return flags == 0 || flags == (1 << 16);
 }
 
-static inline uint16_t consume_16(const char** buffer) {
-    uint16_t ret = read16(*buffer);
-    *buffer += sizeof(int16_t);
+static inline bool assert_can_consume(size_t size,
+                                      size_t cursor,
+                                      size_t buffer_len) {
+    size_t new_cursor = cursor + size;
+    /* unsigned integer overflow is defined to wrap back to 0, if adding size
+       to cursor is ever less than cursor then we must have overflowed */
+    if (new_cursor < cursor) {
+        PyErr_Format(PyExc_ValueError,
+                     "consuming %zu bytes would cause an overflow",
+                     size);
+        return true;
+    }
+    /* new_cursor is an index into the buffer which must be less than or
+       equal to the length of the buffer */
+    if (new_cursor > buffer_len) {
+        PyErr_Format(PyExc_ValueError,
+                     "reading %zu bytes would cause an out of bounds access",
+                     size);
+        return true;
+    }
+    return false;
+}
+
+static inline uint16_t consume16(const char* buffer, size_t* cursor) {
+    uint16_t ret = read16(&buffer[*cursor]);
+    *cursor += sizeof(int16_t);
     return ret;
 }
 
-static inline uint32_t consume_32(const char** buffer) {
-    uint32_t ret = read32(*buffer);
-    *buffer += sizeof(uint32_t);
+static inline bool checked_consume16(const char* buffer,
+                                     size_t* cursor,
+                                     size_t buffer_len,
+                                     uint16_t* out) {
+    if (assert_can_consume(sizeof(uint16_t), *cursor, buffer_len)) {
+        return true;
+    }
+    *out = consume16(buffer, cursor);
+    return false;
+}
+
+static inline uint32_t consume32(const char* buffer, size_t* cursor) {
+    uint32_t ret = read32(&buffer[*cursor]);
+    *cursor += sizeof(int32_t);
     return ret;
+}
+
+static inline bool checked_consume32(const char* buffer,
+                                     size_t* cursor,
+                                     size_t buffer_len,
+                                     uint32_t* out) {
+    if (assert_can_consume(sizeof(uint32_t), *cursor, buffer_len)) {
+        return true;
+    }
+    *out = consume32(buffer, cursor);
+    return false;
 }
 
 static inline void free_outarrays(uint16_t ncolumns,
@@ -429,27 +474,36 @@ error:
     return -1;
 }
 
-int warp_prism_read_binary_results(const char* input_buffer,
+int warp_prism_read_binary_results(const char* const input_buffer,
+                                   size_t input_len,
                                    uint16_t const ncolumns,
                                    const warp_prism_type** column_types,
                                    size_t* written_rows,
                                    char** outarrays,
                                    bool** outmasks) {
+    size_t cursor = 0;
     uint32_t flags;
     size_t row_count = 0;
     size_t allocated_rows = starting_column_buffer_length;
     uint32_t extension_area;
 
-    if (strncmp(input_buffer, signature, signature_len)) {
+    if (input_len < signature_len ||
+        memcmp(input_buffer, signature, signature_len)) {
+
         PyErr_SetString(PyExc_ValueError, "missing postgres signature");
         return -1;
     }
 
     /* advance the cursor through up to the flags segment */
-    input_buffer += signature_len;
+    cursor += signature_len;
 
     /* flags field */
-    flags = consume_32(&input_buffer);
+    if (checked_consume32(input_buffer,
+                          &cursor,
+                          input_len,
+                          &flags)) {
+        return -1;
+    }
 
     if (!valid_flags(flags)) {
         PyErr_SetString(PyExc_ValueError, "invalid flags in header");
@@ -457,8 +511,13 @@ int warp_prism_read_binary_results(const char* input_buffer,
     }
 
     /* skip header extension area */
-    extension_area = consume_32(&input_buffer);
-    input_buffer += extension_area;
+    if (checked_consume32(input_buffer,
+                          &cursor,
+                          input_len,
+                          &extension_area)) {
+        return -1;
+    }
+    cursor += extension_area;
     if (extension_area) {
         PyErr_SetString(PyExc_ValueError, "non-zero extension area length");
         return -1;
@@ -468,26 +527,53 @@ int warp_prism_read_binary_results(const char* input_buffer,
         return -1;
     }
 
-    while ((int16_t) read16(input_buffer) != -1) {
-        uint16_t field_count;
 
-        if ((field_count = consume_16(&input_buffer)) != ncolumns) {
+    while (true) {
+        int16_t field_count;
+
+        if (checked_consume16(input_buffer,
+                              &cursor,
+                              input_len,
+                              (uint16_t*) &field_count)) {
             free_outarrays(ncolumns,
                            row_count,
                            column_types,
                            outarrays,
                            outmasks);
+            return -1;
+        }
+
+        if (field_count == -1) {
+            /* field_count == -1 signals the end of the input data */
+            break;
+        }
+
+        if (field_count != ncolumns) {
             PyErr_Format(PyExc_ValueError,
-                         "mismatched field_count and ncolumns: %d != %d",
+                         "mismatched field_count and ncolumns on row %zu:"
+                         " %d != %d",
+                         row_count,
                          field_count,
                          ncolumns);
             return -1;
         }
 
         if (have_oids(flags)) {
-            consume_32(&input_buffer);
+            uint32_t oid;
+            if (checked_consume32(input_buffer,
+                                  &cursor,
+                                  input_len,
+                                  &oid)) {
+                free_outarrays(ncolumns,
+                               row_count,
+                               column_types,
+                               outarrays,
+                               outmasks);
+                return -1;
+            }
         }
 
+        /* advance the row count; grow arrays if needed */
         if (row_count++ == allocated_rows) {
             if (grow_outarrays(ncolumns,
                                &allocated_rows,
@@ -500,37 +586,50 @@ int warp_prism_read_binary_results(const char* input_buffer,
 
         for (uint_fast16_t n = 0; n < ncolumns; ++n) {
             const warp_prism_type* column_type = column_types[n];
-            int32_t datalen = consume_32(&input_buffer);
+            int32_t datalen;
             size_t row_ix = row_count - 1;
             char* column_buffer = &outarrays[n][row_ix * column_type->size];
 
+            if (checked_consume32(input_buffer,
+                                  &cursor,
+                                  input_len,
+                                  (uint32_t*) &datalen)) {
+                goto error;
+            }
+
             if (!(outmasks[n][row_ix] = (datalen != -1))) {
                 if (column_type->write_null(column_buffer, column_type->size)) {
-                    /* we failed to write at row_ix so we only free up to
-                       row_count - 1 */
-                    free_outarrays(ncolumns,
-                                   row_count - 1,
-                                   column_types,
-                                   outarrays,
-                                   outmasks);
-                    return -1;
+                    goto error;
                 }
 
                 /* no value bytes follow a null */
                 continue;
             }
 
-            if (column_type->parse(column_buffer, input_buffer, datalen)) {
-                /* we failed to write at row_ix so we only free up to
-                   row_count - 1 */
-                free_outarrays(ncolumns,
-                               row_count - 1,
-                               column_types,
-                               outarrays,
-                               outmasks);
-                return -1;
+            if (assert_can_consume(datalen, cursor, input_len) ||
+                column_type->parse(column_buffer,
+                                   &input_buffer[cursor],
+                                   datalen)) {
+                goto error;
             }
-            input_buffer += datalen;
+            cursor += datalen;
+            continue;
+
+        error:
+            /* Write a NULL of the correct size to all of the columns that
+               have not yet been written. This ensures that we can properly
+               cleanup all of the column arrays with `free_outarrays`. */
+            for (; n < ncolumns; ++n) {
+                const warp_prism_type* type = column_types[n];
+                char* buffer = &outarrays[n][row_ix * column_type->size];
+                memset(buffer, 0, type->size);
+            }
+            free_outarrays(ncolumns,
+                           row_count,
+                           column_types,
+                           outarrays,
+                           outmasks);
+            return -1;
         }
     }
     *written_rows = row_count;
@@ -614,11 +713,12 @@ static PyObject* warp_prism_to_arrays(PyObject* self __attribute__((unused)),
 
     if (PyObject_GetBuffer(PyTuple_GET_ITEM(args, 0),
                            &view,
-                           PyBUF_CONTIG)) {
+                           PyBUF_CONTIG_RO)) {
         return NULL;
     }
 
     if (warp_prism_read_binary_results(view.buf,
+                                       view.len,
                                        ncolumns,
                                        types,
                                        &written_rows,
@@ -722,7 +822,7 @@ free_arrays:
 }
 
 PyMethodDef methods[] = {
-    {"to_arrays", (PyCFunction) warp_prism_to_arrays, METH_VARARGS, NULL},
+    {"raw_to_arrays", (PyCFunction) warp_prism_to_arrays, METH_VARARGS, NULL},
     {NULL},
 };
 
@@ -741,6 +841,7 @@ static struct PyModuleDef _warp_prism_module = {
 PyMODINIT_FUNC PyInit__warp_prism(void) {
     PyObject* m;
     PyObject* typeid_map;
+    PyObject* signature_ob;
 
     /* This is needed to setup the numpy C-API. */
     import_array();
@@ -784,11 +885,24 @@ PyMODINIT_FUNC PyInit__warp_prism(void) {
     }
 
     if (!(m = PyModule_Create(&_warp_prism_module))) {
+        Py_DECREF(typeid_map);
         return NULL;
     }
 
     if (PyModule_AddObject(m, "typeid_map", typeid_map)) {
         Py_DECREF(typeid_map);
+        Py_DECREF(m);
+        return NULL;
+    }
+
+    if (!(signature_ob = PyBytes_FromStringAndSize(signature, signature_len))) {
+        Py_DECREF(m);
+        return NULL;
+    }
+
+    if (PyModule_AddObject(m, "postgres_signature", signature_ob)) {
+        Py_DECREF(signature_ob);
+        Py_DECREF(m);
         return NULL;
     }
 

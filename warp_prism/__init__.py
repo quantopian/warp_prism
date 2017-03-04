@@ -10,7 +10,7 @@ from sqlalchemy.ext.compiler import compiles
 from toolz import keymap
 
 from ._warp_prism import (
-    to_arrays as _raw_to_arrays,
+    raw_to_arrays as _raw_to_arrays,
     typeid_map as _raw_typeid_map,
 )
 
