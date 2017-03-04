@@ -115,7 +115,7 @@ static int parse_datetime(char* column_buffer,
                           const char* const input_buffer,
                           size_t len) {
     if (unlikely(len != sizeof(int64_t))) {
-        PyErr_Format(PyExc_ValueError, "unknown datetime size %zu", len);
+        PyErr_Format(PyExc_ValueError, "mismatched datetime size: %zu", len);
         return -1;
     }
 
@@ -131,7 +131,7 @@ static int parse_date(char* column_buffer,
                       const char* const input_buffer,
                       size_t len) {
     if (unlikely(len != sizeof(int32_t))) {
-        PyErr_Format(PyExc_ValueError, "unknown date size %zu", len);
+        PyErr_Format(PyExc_ValueError, "mismatched date size: %zu", len);
         return -1;
     }
 
@@ -145,7 +145,7 @@ static int parse_float32(char* column_buffer,
                          const char* const input_buffer,
                          size_t len) {
     if (unlikely(len != sizeof(float))) {
-        PyErr_Format(PyExc_ValueError, "unknown float32 size %zu", len);
+        PyErr_Format(PyExc_ValueError, "mismatched float32 size: %zu", len);
         return -1;
     }
 
@@ -157,7 +157,7 @@ static int parse_float64(char* column_buffer,
                          const char* const input_buffer,
                          size_t len) {
     if (unlikely(len != sizeof(double))) {
-        PyErr_Format(PyExc_ValueError, "unknown float64 size %zu", len);
+        PyErr_Format(PyExc_ValueError, "mismatched float64 size: %zu", len);
         return -1;
     }
 
