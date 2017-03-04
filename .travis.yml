@@ -6,11 +6,24 @@ python:
   - "3.6"
 
 addons:
-  postgresql: "9.5"
+  postgresql: "9.4"
+  apt:
+    sources:
+      - ubuntu-toolchain-r-test
+    packages:
+      - gcc-5
+      - g++-5
 
-before_script:
+install:
+  - export CC=gcc-5 CXX=g++-5
+  - ${CC} --version
   - pip install numpy
+  - python -c "import numpy;print(numpy.__version__)"
   - pip install -e .[dev]
 
 script:
   - py.test warp_prism
+  - flake8 warp_prism
+
+notifications:
+  email: false
