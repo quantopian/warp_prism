@@ -53,7 +53,6 @@ DEFINE_WRITE(16)
 DEFINE_WRITE(32)
 DEFINE_WRITE(64)
 
-#undef TYPE
 #undef DEFINE_WRITE
 
 typedef int (*parse_function)(char* column_buffer,
@@ -360,39 +359,36 @@ static inline bool assert_can_consume(size_t size,
     return false;
 }
 
-static inline uint16_t consume16(const char* buffer, size_t* cursor) {
-    uint16_t ret = read16(&buffer[*cursor]);
-    *cursor += sizeof(int16_t);
-    return ret;
-}
-
-static inline bool checked_consume16(const char* buffer,
-                                     size_t* cursor,
-                                     size_t buffer_len,
-                                     uint16_t* out) {
-    if (assert_can_consume(sizeof(uint16_t), *cursor, buffer_len)) {
-        return true;
+#define DEFINE_CONSUME(size)                                            \
+    static inline TYPE(size) consume ## size (const char* buffer,       \
+                                              size_t* cursor) {         \
+        TYPE(size) ret = read ## size (&buffer[*cursor]);               \
+        *cursor += sizeof(TYPE(size));                                  \
+        return ret;                                                     \
     }
-    *out = consume16(buffer, cursor);
-    return false;
-}
 
-static inline uint32_t consume32(const char* buffer, size_t* cursor) {
-    uint32_t ret = read32(&buffer[*cursor]);
-    *cursor += sizeof(int32_t);
-    return ret;
-}
+DEFINE_CONSUME(16)
+DEFINE_CONSUME(32)
 
-static inline bool checked_consume32(const char* buffer,
-                                     size_t* cursor,
-                                     size_t buffer_len,
-                                     uint32_t* out) {
-    if (assert_can_consume(sizeof(uint32_t), *cursor, buffer_len)) {
-        return true;
+#undef DEFINE_CONSUME
+
+#define DEFINE_CHECKED_CONSUME(size)                                    \
+    static inline bool checked_consume ## size (const char* buffer,     \
+                                                size_t* cursor,         \
+                                                size_t buffer_len,      \
+                                                TYPE(size)* out) {      \
+        if (assert_can_consume(sizeof(TYPE(size)), *cursor, buffer_len)) { \
+            return true;                                                \
+        }                                                               \
+        *out = consume ## size (buffer, cursor);                        \
+        return false;                                                   \
     }
-    *out = consume32(buffer, cursor);
-    return false;
-}
+
+DEFINE_CHECKED_CONSUME(16)
+DEFINE_CHECKED_CONSUME(32)
+
+#undef DEFINE_CHECKED_CONSUME
+#undef TYPE
 
 static inline void free_outarrays(uint16_t ncolumns,
                                   size_t rowcount,
