@@ -90,21 +90,18 @@ def test_string_type_nonnull(tmp_table_uri):
 
 
 def test_datetime_type_nonnull(tmp_table_uri):
-    data = np.arange(
+    data = pd.date_range(
         '2000',
         '2016',
-        np.timedelta64(1, 'D'),
-        dtype='datetime64[us]',
-    )
+    ).values.astype('datetime64[us]')
     check_roundtrip_nonnull(tmp_table_uri, data, 'datetime', sa.DateTime)
 
 
 def test_date_type_nonnull(tmp_table_uri):
-    data = np.arange(
+    data = pd.date_range(
         '2000',
         '2016',
-        dtype='datetime64[D]',
-    )
+    ).values.astype('datetime64[D]')
     check_roundtrip_nonnull(tmp_table_uri, data, 'date', sa.Date)
 
 
@@ -259,12 +256,13 @@ def test_string_type_null(tmp_table_uri):
 
 
 def test_datetime_type_null(tmp_table_uri):
-    data = np.arange(
-        '2000',
-        '2016',
-        np.timedelta64(1, 'D'),
-        dtype='datetime64[us]',
-    ).astype(object)
+    data = np.array(
+        list(pd.date_range(
+            '2000',
+            '2016',
+        )),
+        dtype=object,
+    )[:-1]  # slice the last element off to have an even number
     mask = np.tile(np.array([True, False]), len(data) // 2)
     data[~mask] = None
     check_roundtrip_null(
@@ -272,7 +270,7 @@ def test_datetime_type_null(tmp_table_uri):
         data,
         'datetime',
         sa.DateTime,
-        np.datetime64('1995-12-13', 'ns'),
+        pd.Timestamp('1995-12-13').to_datetime64(),
         mask,
     )
 
@@ -290,7 +288,7 @@ def test_date_type_null(tmp_table_uri):
         data,
         'date',
         sa.Date,
-        np.datetime64('1995-12-13', 'ns'),
+        pd.Timestamp('1995-12-13').to_datetime64(),
         mask,
         astype=True,
     )
@@ -355,7 +353,8 @@ def test_invalid_datetime_size():
     input_data = _pack_as_invalid_size_postgres_binary_data(
         'q',  # int64_t (quadword)
         8,
-        (np.datetime64('2014-01-01', 'us') + _epoch_offset).view('int64'),
+        (pd.Timestamp('2014-01-01').to_datetime64().astype('datetime64[us]') +
+         _epoch_offset).view('int64'),
     )
 
     dtype = np.dtype('datetime64[us]')
