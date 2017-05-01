@@ -104,7 +104,7 @@ def _getbind(selectable, bind):
     return sa.create_engine(bind)
 
 
-def to_arrays(query, *, bind=None):
+def to_arrays(query, bind=None):
     """Run the query returning a the results as np.ndarrays.
 
     Parameters
@@ -131,7 +131,7 @@ def to_arrays(query, *, bind=None):
     stmt = _CopyToBinary(query, bind)
     with bind.connect() as conn:
         conn.connection.cursor().copy_expert(literal_compile(stmt), buf)
-    out = _raw_to_arrays(buf.getbuffer(), types)
+    out = _raw_to_arrays(buf.getvalue(), types)
     column_names = query.c.keys()
     return {column_names[n]: v for n, v in enumerate(out)}
 
@@ -151,7 +151,7 @@ null_values = keymap(np.dtype, {
 _default_null_values_for_type = null_values
 
 
-def to_dataframe(query, *, bind=None, null_values=None):
+def to_dataframe(query, bind=None, null_values=None):
     """Run the query returning a the results as a pd.DataFrame.
 
     Parameters

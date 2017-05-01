@@ -2,13 +2,25 @@
 from setuptools import setup, Extension, find_packages
 import sys
 
-import numpy as np
-
 long_description = ''
 
 if 'upload' in sys.argv:
     with open('README.rst') as f:
         long_description = f.read()
+
+if 'sdist' in sys.argv:
+    ext_modules = []
+else:
+    import numpy as np
+    ext_modules = [
+        Extension(
+            'warp_prism._warp_prism',
+            ['warp_prism/_warp_prism.c'],
+            include_dirs=[np.get_include()],
+            extra_compile_args=['-std=c99', '-Wall', '-Wextra'],
+        ),
+    ]
+
 
 classifiers = [
     'Development Status :: 5 - Production/Stable',
@@ -33,14 +45,7 @@ setup(
     license='Apache 2.0',
     classifiers=classifiers,
     url='https://github.com/quantopian/warp_prism',
-    ext_modules=[
-        Extension(
-            'warp_prism._warp_prism',
-            ['warp_prism/_warp_prism.c'],
-            include_dirs=[np.get_include()],
-            extra_compile_args=['-std=c99', '-Wall', '-Wextra'],
-        ),
-    ],
+    ext_modules=ext_modules,
     install_requires=[
         'datashape',
         'numpy',

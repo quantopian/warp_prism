@@ -111,7 +111,6 @@ def check_roundtrip_null_values(table_uri,
                                 sqltype,
                                 null_values,
                                 mask,
-                                *,
                                 astype=False):
     """Check the data roundtrip through postgres using warp_prism to read the
     data
@@ -170,7 +169,6 @@ def check_roundtrip_null(table_uri,
                          sqltype,
                          null,
                          mask,
-                         *,
                          astype=False):
     """Check the data roundtrip through postgres using warp_prism to read the
     data
@@ -427,7 +425,7 @@ def test_missing_flags():
 
 
 def test_missing_extension_length():
-    input_data = postgres_signature + (0).to_bytes(4, 'big')
+    input_data = postgres_signature + b'\x00\x00\x00\x00'
 
     with pytest.raises(ValueError) as e:
         raw_to_arrays(input_data, ())
@@ -438,7 +436,7 @@ def test_missing_extension_length():
 
 
 def test_missing_end_marker():
-    input_data = postgres_signature + (0).to_bytes(4, 'big')
+    input_data = postgres_signature + b'\x00\x00\x00\x00'
 
     with pytest.raises(ValueError) as e:
         raw_to_arrays(input_data, ())
