@@ -1,8 +1,7 @@
 #!/usr/bin/env python
 from setuptools import setup, Extension, find_packages
+from setuptools.command.build_ext import build_ext
 import sys
-
-import numpy as np
 
 long_description = ''
 
@@ -22,6 +21,24 @@ classifiers = [
     'Topic :: Scientific/Engineering',
 ]
 
+class BuildExtWithNumpyCommand(build_ext):
+    """Adds numpy headers to build_ext.
+
+    This is needed to defer the import of numpy until after requirements have been installed.
+    """
+    def run(self):
+        import numpy as np
+        self.include_dirs.append(np.get_include())
+        build_ext.run(self)
+
+ext_modules = [
+    Extension(
+        'warp_prism._warp_prism',
+        ['warp_prism/_warp_prism.c'],
+        extra_compile_args=['-std=c99', '-Wall', '-Wextra'],
+    ),
+]
+
 setup(
     name='warp_prism',
     version='0.1.1',
@@ -33,14 +50,8 @@ setup(
     license='Apache 2.0',
     classifiers=classifiers,
     url='https://github.com/quantopian/warp_prism',
-    ext_modules=[
-        Extension(
-            'warp_prism._warp_prism',
-            ['warp_prism/_warp_prism.c'],
-            include_dirs=[np.get_include()],
-            extra_compile_args=['-std=c99', '-Wall', '-Wextra'],
-        ),
-    ],
+    cmdclass = {'build_ext': BuildExtWithNumpyCommand},
+    ext_modules=ext_modules,
     install_requires=[
         'datashape',
         'numpy',
