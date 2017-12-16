@@ -339,18 +339,16 @@ static inline bool valid_flags(uint32_t flags) {
 static inline bool assert_can_consume(size_t size,
                                       size_t cursor,
                                       size_t buffer_len) {
-    size_t new_cursor = cursor + size;
-    /* unsigned integer overflow is defined to wrap back to 0, if adding size
-       to cursor is ever less than cursor then we must have overflowed */
-    if (new_cursor < cursor) {
+    size_t new_cursor;
+    if (unlikely(__builtin_add_overflow(cursor, size, &new_cursor))) {
         PyErr_Format(PyExc_ValueError,
                      "consuming %zu bytes would cause an overflow",
                      size);
         return true;
     }
-    /* new_cursor is an index into the buffer which must be less than or
-       equal to the length of the buffer */
-    if (new_cursor > buffer_len) {
+    /* new_cursor is an index into the buffer which cannot be greater than or
+       equal to the buffer length */
+    if (unlikely(new_cursor >= buffer_len)) {
         PyErr_Format(PyExc_ValueError,
                      "reading %zu bytes would cause an out of bounds access",
                      size);
@@ -405,30 +403,53 @@ static inline int allocate_outarrays(uint16_t ncolumns,
                                      const warp_prism_type** column_types,
                                      char** outarrays,
                                      bool** outmasks) {
-    uint_fast16_t n;
+    uint_fast16_t n = 0;
+    size_t mask_allocation_size;
 
-    for (n = 0; n < ncolumns; ++n) {
-        outarrays[n] = PyMem_Malloc(starting_column_buffer_length *
-                                    column_types[n]->size);
+    if (unlikely(__builtin_mul_overflow(starting_column_buffer_length,
+                                        sizeof(bool),
+                                        &mask_allocation_size))) {
+        /* this should literally never happen */
+        PyErr_SetString(PyExc_OverflowError,
+                        "allocation size would overflow");
+        goto error;
+    }
+
+    for (; n < ncolumns; ++n) {
+        size_t allocation_size;
+        if (unlikely(__builtin_mul_overflow(starting_column_buffer_length,
+                                            column_types[n]->size,
+                                            &allocation_size))) {
+            PyErr_SetString(PyExc_OverflowError,
+                            "allocation size would overflow");
+            goto error;
+        }
+        outarrays[n] = PyMem_Malloc(allocation_size);
         if (!outarrays[n]) {
             goto error;
         }
 
-        outmasks[n] = PyMem_Malloc(starting_column_buffer_length *
-                                   sizeof(bool));
+        outmasks[n] = PyMem_Malloc(mask_allocation_size);
         if (!outmasks[n]) {
-            free(outarrays[n]);
+            /* free_outarrays expects that both the array and the mask are
+               present but we failed halfway through the allocation. Clean up
+               just the outarray and then, at the error label, feed
+               free_outarrays n - 1 to clean up the allocated columns. */
+            column_types[n]->free(outarrays[n], 0);
             goto error;
         }
     }
     return 0;
 
 error:
-    free_outarrays(n - 1,
-                   starting_column_buffer_length,
-                   column_types,
-                   outarrays,
-                   outmasks);
+    if (n > 0) {
+        /* free the column and mask buffers that have already been allocated */
+        free_outarrays(n - 1,
+                       0,
+                       column_types,
+                       outarrays,
+                       outmasks);
+    }
     return -1;
 }
 
@@ -437,33 +458,55 @@ static inline int grow_outarrays(uint16_t ncolumns,
                                  const warp_prism_type** column_types,
                                  char** outarrays,
                                  bool** outmasks) {
+    size_t old_row_count = *row_count;
+    size_t new_row_count;
     size_t new_mask_size;
     uint_fast16_t n;
 
-    *row_count *= column_buffer_growth_factor;
-    new_mask_size = *row_count * column_buffer_growth_factor * sizeof(bool);
+    if (unlikely(__builtin_mul_overflow(old_row_count,
+                                        column_buffer_growth_factor,
+                                        &new_row_count))) {
+        PyErr_SetString(PyExc_OverflowError, "row count would overflow");
+        goto error;
+    }
+    *row_count = new_row_count;
+
+    if (unlikely(__builtin_mul_overflow(new_row_count,
+                                        sizeof(bool),
+                                        &new_mask_size))) {
+        PyErr_SetString(PyExc_OverflowError, "mask size would overflow");
+        goto error;
+    }
 
     for (n = 0; n < ncolumns; ++n) {
+        size_t allocation_size;
+        char* new;
         bool* newmask;
-        char* new = PyMem_Realloc(outarrays[n],
-                                  column_types[n]->size * *row_count);
 
+        if (unlikely(__builtin_mul_overflow(new_row_count,
+                                            column_types[n]->size,
+                                            &allocation_size))) {
+            PyErr_SetString(PyExc_OverflowError,
+                            "allocation size would overflow");
+            goto error;
+        }
+
+        new = PyMem_Realloc(outarrays[n], allocation_size);
         if (!new) {
             goto error;
         }
         outarrays[n] = new;
 
         newmask = PyMem_Realloc(outmasks[n], new_mask_size);
-        if (!new) {
-            free(outarrays[n]);
+        if (!newmask) {
             goto error;
         }
         outmasks[n] = newmask;
     }
     return 0;
 error:
-    free_outarrays(n - 1,
-                   *row_count,
+    free_outarrays(ncolumns,
+                   old_row_count,
                    column_types,
                    outarrays,
                    outmasks);
@@ -472,7 +515,7 @@ error:
 
 int warp_prism_read_binary_results(const char* const input_buffer,
                                    size_t input_len,
-                                   uint16_t const ncolumns,
+                                   const uint16_t ncolumns,
                                    const warp_prism_type** column_types,
                                    size_t* written_rows,
                                    char** outarrays,
