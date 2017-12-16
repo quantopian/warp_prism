@@ -346,9 +346,15 @@ static inline bool assert_can_consume(size_t size,
                      size);
         return true;
     }
-    /* new_cursor is an index into the buffer which cannot be greater than or
-       equal to the buffer length */
-    if (unlikely(new_cursor >= buffer_len)) {
+    /* new_cursor is the *next* location we would do a read. This cannot be
+       greater than the buffer_len because that means we would have read past
+       the buffer's allocated space. It may be exactly equal to buffer_len which
+       means we have consumed all of the input (but no more). For example:
+
+       If cursor = 0; size = buffer_len = 10: then new_cursor = 0 + 10 = 10.
+       This means that new_cursor is exactly equal to buffer_len but we have not
+       done an out of bounds read. */
+    if (unlikely(new_cursor > buffer_len)) {
         PyErr_Format(PyExc_ValueError,
                      "reading %zu bytes would cause an out of bounds access",
                      size);
