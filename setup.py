@@ -49,6 +49,7 @@ setup(
         'psycopg2',
         'odo',
         'toolz',
+        'networkx<=1.11',
     ],
     extras_require={
         'dev': [
