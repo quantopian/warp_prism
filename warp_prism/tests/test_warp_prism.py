@@ -9,7 +9,11 @@ import pandas as pd
 import pytest
 import sqlalchemy as sa
 
-from warp_prism._warp_prism import postgres_signature, raw_to_arrays
+from warp_prism._warp_prism import (
+    postgres_signature,
+    raw_to_arrays,
+    test_overflow_operations as _test_overflow_operations,
+)
 from warp_prism import (
     to_arrays,
     to_dataframe,
@@ -446,3 +450,8 @@ def test_missing_end_marker():
     assert (
         str(e.value) == 'reading 4 bytes would cause an out of bounds access'
     )
+
+
+def test_overflow_operations():
+    # thanks pytest
+    _test_overflow_operations()

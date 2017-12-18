@@ -5,6 +5,10 @@ python:
   - "3.5"
   - "3.6"
 
+env:
+  - CC=gcc CXX=g++
+  - CC=gcc-5 CXX=g++-5
+
 addons:
   postgresql: "9.4"
   apt:
@@ -15,7 +19,6 @@ addons:
       - g++-5
 
 install:
-  - export CC=gcc-5 CXX=g++-5
   - ${CC} --version
   - pip install numpy
   - python -c "import numpy;print(numpy.__version__)"
