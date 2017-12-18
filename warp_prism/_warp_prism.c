@@ -12,6 +12,21 @@ const size_t signature_len = 11;
 const size_t column_buffer_growth_factor = 2;
 const size_t starting_column_buffer_length = 4096;
 
+#if __GNUC__ >= 5
+#define add_overflow __builtin_add_overflow
+#define mul_overflow __builtin_mul_overflow
+#else
+static inline bool add_overflow(size_t a, size_t b, size_t* out) {
+    *out = a + b;
+    return *out < a;
+}
+
+static inline bool mul_overflow(size_t a, size_t b, size_t* out) {
+    *out = a * b;
+    return a > SIZE_MAX / b;
+}
+#endif
+
 #ifdef __ORDER_LITTLE_ENDIAN__
 #define MAYBE_BSWAP(arg, size) __builtin_bswap ## size (arg)
 #else
@@ -340,7 +355,7 @@ static inline bool assert_can_consume(size_t size,
                                       size_t cursor,
                                       size_t buffer_len) {
     size_t new_cursor;
-    if (unlikely(__builtin_add_overflow(cursor, size, &new_cursor))) {
+    if (unlikely(add_overflow(cursor, size, &new_cursor))) {
         PyErr_Format(PyExc_ValueError,
                      "consuming %zu bytes would cause an overflow",
                      size);
@@ -412,9 +427,9 @@ static inline int allocate_outarrays(uint16_t ncolumns,
     uint_fast16_t n = 0;
     size_t mask_allocation_size;
 
-    if (unlikely(__builtin_mul_overflow(starting_column_buffer_length,
-                                        sizeof(bool),
-                                        &mask_allocation_size))) {
+    if (unlikely(mul_overflow(starting_column_buffer_length,
+                              sizeof(bool),
+                              &mask_allocation_size))) {
         /* this should literally never happen */
         PyErr_SetString(PyExc_OverflowError,
                         "allocation size would overflow");
@@ -423,9 +438,9 @@ static inline int allocate_outarrays(uint16_t ncolumns,
 
     for (; n < ncolumns; ++n) {
         size_t allocation_size;
-        if (unlikely(__builtin_mul_overflow(starting_column_buffer_length,
-                                            column_types[n]->size,
-                                            &allocation_size))) {
+        if (unlikely(mul_overflow(starting_column_buffer_length,
+                                  column_types[n]->size,
+                                  &allocation_size))) {
             PyErr_SetString(PyExc_OverflowError,
                             "allocation size would overflow");
             goto error;
@@ -469,17 +484,17 @@ static inline int grow_outarrays(uint16_t ncolumns,
     size_t new_mask_size;
     uint_fast16_t n;
 
-    if (unlikely(__builtin_mul_overflow(old_row_count,
-                                        column_buffer_growth_factor,
-                                        &new_row_count))) {
+    if (unlikely(mul_overflow(old_row_count,
+                              column_buffer_growth_factor,
+                              &new_row_count))) {
         PyErr_SetString(PyExc_OverflowError, "row count would overflow");
         goto error;
     }
     *row_count = new_row_count;
 
-    if (unlikely(__builtin_mul_overflow(new_row_count,
-                                        sizeof(bool),
-                                        &new_mask_size))) {
+    if (unlikely(mul_overflow(new_row_count,
+                              sizeof(bool),
+                              &new_mask_size))) {
         PyErr_SetString(PyExc_OverflowError, "mask size would overflow");
         goto error;
     }
@@ -489,9 +504,9 @@ static inline int grow_outarrays(uint16_t ncolumns,
         char* new;
         bool* newmask;
 
-        if (unlikely(__builtin_mul_overflow(new_row_count,
-                                            column_types[n]->size,
-                                            &allocation_size))) {
+        if (unlikely(mul_overflow(new_row_count,
+                                  column_types[n]->size,
+                                  &allocation_size))) {
             PyErr_SetString(PyExc_OverflowError,
                             "allocation size would overflow");
             goto error;
@@ -866,8 +881,42 @@ free_arrays:
     return NULL;
 }
 
+PyObject* test_overflow_operations(PyObject* self __attribute__((unused))) {
+    size_t out;
+
+    /* we actually want to run this code; gcc can figure out this out at compile
+       time without the volatile */
+    volatile int a = 2;
+
+    if (!add_overflow(SIZE_MAX, a, &out)) {
+        PyErr_SetString(PyExc_AssertionError, "add_overflow max + 2 failed");
+        return NULL;
+    }
+
+    if (!mul_overflow(SIZE_MAX, a, &out)) {
+        PyErr_SetString(PyExc_AssertionError, "mul_overflow max * 2 failed");
+        return NULL;
+    }
+
+    /* this should not overflow */
+    if (mul_overflow(2, a, &out)) {
+        PyErr_SetString(PyExc_AssertionError, "mul_overflow 2 * 2 failed");
+        return NULL;
+    }
+
+    if (out != 4) {
+        PyErr_Format(PyExc_AssertionError,
+                     "mul_overflow 2 * 2 failed; %ld != 4",
+                     out);
+        return NULL;
+    }
+
+    Py_RETURN_NONE;
+}
+
 PyMethodDef methods[] = {
     {"raw_to_arrays", (PyCFunction) warp_prism_to_arrays, METH_VARARGS, NULL},
+    {"test_overflow_operations", (PyCFunction) test_overflow_operations, METH_NOARGS, NULL},
     {NULL},
 };
 
