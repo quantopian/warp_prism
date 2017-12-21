@@ -6,6 +6,9 @@
 #include "Python.h"
 #include "numpy/arrayobject.h"
 
+#define COMPILING_IN_PY2 (PY_VERSION_HEX <= 0x03000000)
+#define MODULE_NAME "warp_prism._warp_prism"
+
 const char* const signature = "PGCOPY\n\377\r\n\0";
 const size_t signature_len = 11;
 
@@ -920,9 +923,10 @@ PyMethodDef methods[] = {
     {NULL},
 };
 
+#if !COMPILING_IN_PY2
 static struct PyModuleDef _warp_prism_module = {
     PyModuleDef_HEAD_INIT,
-    "warp_prism._warp_prism",
+    MODULE_NAME,
     "",
     -1,
     methods,
@@ -931,8 +935,17 @@ static struct PyModuleDef _warp_prism_module = {
     NULL,
     NULL
 };
+#endif  /* !COMPILING_IN_PY2*/
 
-PyMODINIT_FUNC PyInit__warp_prism(void) {
+PyMODINIT_FUNC
+#if COMPILING_IN_PY2
+#define ERROR_RETURN
+init_warp_prism(void)
+#else
+#define ERROR_RETURN NULL
+PyInit__warp_prism(void)
+#endif  /* COMPILING_IN_PY2*/
+{
     PyObject* m;
     PyObject* typeid_map;
     PyObject* signature_ob;
@@ -941,7 +954,7 @@ PyMODINIT_FUNC PyInit__warp_prism(void) {
     import_array();
 
     if (!(typeid_map = PyDict_New())) {
-        return NULL;
+        return ERROR_RETURN;
     }
 
     for (size_t n = 0; n < max_typeid; ++n) {
@@ -952,21 +965,21 @@ PyMODINIT_FUNC PyInit__warp_prism(void) {
 
         if (!(dtype_name_ob = PyUnicode_FromString(typeids[n]->dtype_name))) {
             Py_DECREF(typeid_map);
-            return NULL;
+            return ERROR_RETURN;
         }
 
         if (!PyArray_DescrConverter(dtype_name_ob,
                                     (PyArray_Descr**) &typeids[n]->dtype)) {
             Py_DECREF(dtype_name_ob);
             Py_DECREF(typeid_map);
-            return NULL;
+            return ERROR_RETURN;
         }
 
 
         if (!(n_ob = PyLong_FromLong(n))) {
             Py_DECREF(dtype_name_ob);
             Py_DECREF(typeid_map);
-            return NULL;
+            return ERROR_RETURN;
         }
 
         err = PyDict_SetItem(typeid_map, dtype_name_ob, n_ob);
@@ -974,31 +987,37 @@ PyMODINIT_FUNC PyInit__warp_prism(void) {
         Py_DECREF(n_ob);
         if (err) {
             Py_DECREF(typeid_map);
-            return NULL;
+            return ERROR_RETURN;
         }
     }
 
+#if COMPILING_IN_PY2
+    if (!(m = Py_InitModule(MODULE_NAME, methods))) {
+#else
     if (!(m = PyModule_Create(&_warp_prism_module))) {
+#endif /* COMPILING_IN_PY2 */
         Py_DECREF(typeid_map);
-        return NULL;
+        return ERROR_RETURN;
     }
 
     if (PyModule_AddObject(m, "typeid_map", typeid_map)) {
         Py_DECREF(typeid_map);
         Py_DECREF(m);
-        return NULL;
+        return ERROR_RETURN;
     }
 
     if (!(signature_ob = PyBytes_FromStringAndSize(signature, signature_len))) {
         Py_DECREF(m);
-        return NULL;
+        return ERROR_RETURN;
     }
 
     if (PyModule_AddObject(m, "postgres_signature", signature_ob)) {
         Py_DECREF(signature_ob);
         Py_DECREF(m);
-        return NULL;
+        return ERROR_RETURN;
     }
 
+#if !COMPILING_IN_PY2
     return m;
+#endif  /* !COMPILING_IN_PY2 */
 }
