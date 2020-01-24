@@ -2,24 +2,19 @@ from string import ascii_letters
 import struct
 from uuid import uuid4
 
-from datashape import var, R, Option, dshape
 import numpy as np
-from odo import resource, odo
 import pandas as pd
+import psycopg2
 import pytest
-import sqlalchemy as sa
 
 from warp_prism._warp_prism import (
     postgres_signature,
     raw_to_arrays,
     test_overflow_operations as _test_overflow_operations,
 )
-from warp_prism import (
-    to_arrays,
-    to_dataframe,
-    null_values as null_values_for_type,
-    _typeid_map,
-)
+from warp_prism import to_arrays, to_dataframe
+from warp_prism.query import null_values as null_values_for_type
+from warp_prism.types import dtype_to_typeid
 from warp_prism.tests import tmp_db_uri as tmp_db_uri_ctx
 
 
@@ -34,6 +29,25 @@ def tmp_table_uri(tmp_db_uri):
     return '%s::%s%s' % (tmp_db_uri, 'table_', uuid4().hex)
 
 
+def item(a):
+    """Convert a value to a Python built in type (not a numpy type).
+
+    Parameters
+    ----------
+    a : any
+        The value to convert.
+
+    Returns
+    -------
+    item : any
+        The base Python type equivalent value.
+    """
+    try:
+        return a.item()
+    except AttributeError:
+        return a
+
+
 def check_roundtrip_nonnull(table_uri, data, dtype, sqltype):
     """Check the data roundtrip through postgres using warp_prism to read the
     data
@@ -41,37 +55,41 @@ def check_roundtrip_nonnull(table_uri, data, dtype, sqltype):
     Parameters
     ----------
     table_uri : str
-        The uri to a unique table.
+        The uri for the  table.
     data : np.array
         The input data.
     dtype : str
         The dtype of the data.
-    sqltype : type
-        The sqlalchemy type of the data.
+    sqltype : str
+        The sql type of the data.
     """
-    input_dataframe = pd.DataFrame({'a': data})
-    table = odo(input_dataframe, table_uri, dshape=var * R['a': dtype])
-    # Ensure that odo created the table correctly. If these fail the other
-    # tests are not well defined.
-    assert table.columns.keys() == ['a']
-    assert isinstance(table.columns['a'].type, sqltype)
+    db, table = table_uri.split('::')
+    with psycopg2.connect(db) as conn, conn.cursor() as cur:
+        cur.execute('create table %s (a %s)' % (table, sqltype))
+        cur.executemany(
+            'insert into {} values (%s)'.format(table),
+            [(item(v),) for v in data],
+        )
 
-    arrays = to_arrays(table)
+        query = 'select * from %s' % table
+        arrays = to_arrays(query, bind=conn)
+        output_dataframe = to_dataframe(query, bind=conn)
+
     assert len(arrays) == 1
     array, mask = arrays['a']
     assert (array == data).all()
     assert mask.all()
 
-    output_dataframe = to_dataframe(table)
-    pd.util.testing.assert_frame_equal(output_dataframe, input_dataframe)
+    expected_dataframe = pd.DataFrame({'a': data})
+    pd.util.testing.assert_frame_equal(output_dataframe, expected_dataframe)
 
 
 @pytest.mark.parametrize('dtype,sqltype,start,stop,step', (
-    ('int16', sa.SmallInteger, 0, 5000, 1),
-    ('int32', sa.Integer, 0, 5000, 1),
-    ('int64', sa.BigInteger, 0, 5000, 1),
-    ('float32', sa.REAL, 0, 2500, 0.5),
-    ('float64', sa.FLOAT, 0, 2500, 0.5),
+    ('int16', 'int2', 0, 5000, 1),
+    ('int32', 'int4', 0, 5000, 1),
+    ('int64', 'int8', 0, 5000, 1),
+    ('float32', 'float4', 0, 2500, 0.5),
+    ('float64', 'float8', 0, 2500, 0.5),
 ))
 def test_numeric_type_nonnull(tmp_table_uri,
                               dtype,
@@ -85,12 +103,12 @@ def test_numeric_type_nonnull(tmp_table_uri,
 
 def test_bool_type_nonnull(tmp_table_uri):
     data = np.array([True] * 2500 + [False] * 2500, dtype=bool)
-    check_roundtrip_nonnull(tmp_table_uri, data, 'bool', sa.Boolean)
+    check_roundtrip_nonnull(tmp_table_uri, data, 'bool', 'bool')
 
 
 def test_string_type_nonnull(tmp_table_uri):
     data = np.array(list(ascii_letters) * 200, dtype='object')
-    check_roundtrip_nonnull(tmp_table_uri, data, 'string', sa.String)
+    check_roundtrip_nonnull(tmp_table_uri, data, 'object', 'text')
 
 
 def test_datetime_type_nonnull(tmp_table_uri):
@@ -98,7 +116,7 @@ def test_datetime_type_nonnull(tmp_table_uri):
         '2000',
         '2016',
     ).values.astype('datetime64[us]')
-    check_roundtrip_nonnull(tmp_table_uri, data, 'datetime', sa.DateTime)
+    check_roundtrip_nonnull(tmp_table_uri, data, 'datetime64[us]', 'timestamp')
 
 
 def test_date_type_nonnull(tmp_table_uri):
@@ -106,7 +124,7 @@ def test_date_type_nonnull(tmp_table_uri):
         '2000',
         '2016',
     ).values.astype('datetime64[D]')
-    check_roundtrip_nonnull(tmp_table_uri, data, 'date', sa.Date)
+    check_roundtrip_nonnull(tmp_table_uri, data, 'datetime64[D]', 'date')
 
 
 def check_roundtrip_null_values(table_uri,
@@ -128,30 +146,37 @@ def check_roundtrip_null_values(table_uri,
         The input data.
     dtype : str
         The dtype of the data.
-    sqltype : type
-        The sqlalchemy type of the data.
+    sqltype : str
+        The sql type of the data.
     null_values : dict[str, any]
         The value to coerce ``NULL`` to.
     astype : bool, optional
         Coerce the input data to the given dtype before making assertions about
         the output data.
     """
-    table = resource(table_uri, dshape=var * R['a': Option(dtype)])
-    # Ensure that odo created the table correctly. If these fail the other
-    # tests are not well defined.
-    assert table.columns.keys() == ['a']
-    assert isinstance(table.columns['a'].type, sqltype)
-    table.insert().values([{'a': v} for v in data]).execute()
+    db, table = table_uri.split('::')
+    with psycopg2.connect(db) as conn, conn.cursor() as cur:
+        cur.execute('create table %s (a %s)' % (table, sqltype))
+        cur.executemany(
+            'insert into {} values (%s)'.format(table),
+            [(item(v),) for v in data],
+        )
 
-    arrays = to_arrays(table)
+        query = 'select * from %s' % table
+        arrays = to_arrays(query, bind=conn)
+        output_dataframe = to_dataframe(
+            query,
+            null_values=null_values,
+            bind=conn,
+        )
+
     assert len(arrays) == 1
     array, actual_mask = arrays['a']
     assert (actual_mask == mask).all()
     assert (array[mask] == data[mask]).all()
 
-    output_dataframe = to_dataframe(table, null_values=null_values)
     if astype:
-        data = data.astype(dshape(dtype).measure.to_numpy_dtype())
+        data = data.astype(dtype, copy=False)
     expected_dataframe = pd.DataFrame({'a': data})
     expected_dataframe[~mask] = null_values.get(
         'a',
@@ -187,8 +212,8 @@ def check_roundtrip_null(table_uri,
         The input data.
     dtype : str
         The dtype of the data.
-    sqltype : type
-        The sqlalchemy type of the data.
+    sqltype : str
+        The sql type of the data.
     null : any
         The value to coerce ``NULL`` to.
     astype : bool, optional
@@ -207,11 +232,11 @@ def check_roundtrip_null(table_uri,
 
 
 @pytest.mark.parametrize('dtype,sqltype,start,stop,step,null', (
-    ('int16', sa.SmallInteger, 0, 5000, 1, -1),
-    ('int32', sa.Integer, 0, 5000, 1, -1),
-    ('int64', sa.BigInteger, 0, 5000, 1, -1),
-    ('float32', sa.REAL, 0, 2500, 0.5, -1.0),
-    ('float64', sa.FLOAT, 0, 2500, 0.5, -1.0),
+    ('int16', 'int2', 0, 5000, 1, -1),
+    ('int32', 'int4', 0, 5000, 1, -1),
+    ('int64', 'int8', 0, 5000, 1, -1),
+    ('float32', 'float4', 0, 2500, 0.5, -1.0),
+    ('float64', 'float8', 0, 2500, 0.5, -1.0),
 ))
 def test_numeric_type_null(tmp_table_uri,
                            dtype,
@@ -227,9 +252,9 @@ def test_numeric_type_null(tmp_table_uri,
 
 
 @pytest.mark.parametrize('dtype,sqltype', (
-    ('int16', sa.SmallInteger),
-    ('int32', sa.Integer),
-    ('int64', sa.BigInteger),
+    ('int16', 'int2'),
+    ('int32', 'int4'),
+    ('int64', 'int8'),
 ))
 def test_numeric_default_null_promote(tmp_table_uri, dtype, sqltype):
     data = np.arange(0, 100, dtype=dtype).astype(object)
@@ -242,7 +267,7 @@ def test_bool_type_null(tmp_table_uri):
     data = np.array([True] * 2500 + [False] * 2500, dtype=bool).astype(object)
     mask = np.tile(np.array([True, False]), len(data) // 2)
     data[~mask] = None
-    check_roundtrip_null(tmp_table_uri, data, 'bool', sa.Boolean, False, mask)
+    check_roundtrip_null(tmp_table_uri, data, 'bool', 'bool', False, mask)
 
 
 def test_string_type_null(tmp_table_uri):
@@ -252,8 +277,8 @@ def test_string_type_null(tmp_table_uri):
     check_roundtrip_null(
         tmp_table_uri,
         data,
-        'string',
-        sa.String,
+        'object',
+        'text',
         'ayy lmao',
         mask,
     )
@@ -272,8 +297,8 @@ def test_datetime_type_null(tmp_table_uri):
     check_roundtrip_null(
         tmp_table_uri,
         data,
-        'datetime',
-        sa.DateTime,
+        'datetime64[us]',
+        'timestamp',
         pd.Timestamp('1995-12-13').to_datetime64(),
         mask,
     )
@@ -290,9 +315,9 @@ def test_date_type_null(tmp_table_uri):
     check_roundtrip_null(
         tmp_table_uri,
         data,
+        'datetime64[D]',
         'date',
-        sa.Date,
-        pd.Timestamp('1995-12-13').to_datetime64(),
+        np.datetime64('1995-12-13', 'ns'),
         mask,
         astype=True,
     )
@@ -341,7 +366,7 @@ def test_invalid_numeric_size(dtype):
     )
 
     with pytest.raises(ValueError) as e:
-        raw_to_arrays(input_data, (_typeid_map[dtype],))
+        raw_to_arrays(input_data, (dtype_to_typeid(dtype),))
 
     assert str(e.value) == 'mismatched %s size: %s' % (
         dtype.name,
@@ -363,7 +388,7 @@ def test_invalid_datetime_size():
 
     dtype = np.dtype('datetime64[us]')
     with pytest.raises(ValueError) as e:
-        raw_to_arrays(input_data, (_typeid_map[dtype],))
+        raw_to_arrays(input_data, (dtype_to_typeid(dtype),))
 
     assert str(e.value) == 'mismatched datetime size: 7'
 
@@ -377,7 +402,7 @@ def test_invalid_date_size():
 
     dtype = np.dtype('datetime64[D]')
     with pytest.raises(ValueError) as e:
-        raw_to_arrays(input_data, (_typeid_map[dtype],))
+        raw_to_arrays(input_data, (dtype_to_typeid(dtype),))
 
     assert str(e.value) == 'mismatched date size: 3'
 
@@ -405,7 +430,7 @@ def test_invalid_text():
     # we put the invalid unicode as the first column to test that we can clean
     # up the cell in the second column before we have written a string there
 
-    str_typeid = _typeid_map[np.dtype(object)]
+    str_typeid = dtype_to_typeid(np.dtype(object))
     with pytest.raises(UnicodeDecodeError):
         raw_to_arrays(input_data, (str_typeid, str_typeid))
 

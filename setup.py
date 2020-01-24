@@ -43,10 +43,7 @@ setup(
     ],
     install_requires=[
         'numpy',
-        'pandas',
-        'sqlalchemy',
         'psycopg2',
-        'toolz',
     ],
     extras_require={
         'dev': [
