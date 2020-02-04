@@ -21,6 +21,14 @@ try:
 except ImportError:
     pd = None
 
+try:
+    import sqlalchemy as sa
+
+    use_sqlalchemy = pytest.mark.parametrize('use_sqlalchemy', [False, True])
+except ImportError:
+    sa = None
+    use_sqlalchemy = pytest.mark.parametrize('use_sqlalchemy', [False])
+
 
 @pytest.fixture(scope='module')
 def tmp_db_uri():
@@ -52,7 +60,7 @@ def item(a):
         return a
 
 
-def check_roundtrip_nonnull(table_uri, data, dtype, sqltype):
+def check_roundtrip_nonnull(table_uri, data, dtype, sqltype, use_sqlalchemy):
     """Check the data roundtrip through postgres using warp_prism to read the
     data
 
@@ -66,17 +74,29 @@ def check_roundtrip_nonnull(table_uri, data, dtype, sqltype):
         The dtype of the data.
     sqltype : str
         The sql type of the data.
+    use_sqlalchemy : bool
+        Use sqlalchemy for the query instead of psycopg2.
     """
     db, table = table_uri.split('::')
-    with psycopg2.connect(db) as conn, conn.cursor() as cur:
-        cur.execute('create table %s (a %s)' % (table, sqltype))
-        cur.executemany(
-            'insert into {} values (%s)'.format(table),
-            [(item(v),) for v in data],
-        )
+    with psycopg2.connect(db) as conn:
+        with conn.cursor() as cur:
+            cur.execute('create table %s (a %s)' % (table, sqltype))
+            cur.executemany(
+                'insert into {} values (%s)'.format(table),
+                [(item(v),) for v in data],
+            )
+            cur.execute('commit')
 
-        query = 'select * from %s' % table
-        arrays = to_arrays(query, bind=conn)
+        if use_sqlalchemy:
+            bind = sa.create_engine(db)
+            meta = sa.MetaData(bind)
+            t = sa.Table(table, meta, autoload=True)
+            query = sa.select(t.c)
+        else:
+            bind = conn
+            query = 'select * from %s' % table
+
+        arrays = to_arrays(query, bind=bind)
 
         if pd is not None:
             output_dataframe = to_dataframe(query, bind=conn)
@@ -94,6 +114,7 @@ def check_roundtrip_nonnull(table_uri, data, dtype, sqltype):
         )
 
 
+@use_sqlalchemy
 @pytest.mark.parametrize('dtype,sqltype,start,stop,step', (
     ('int16', 'int2', 0, 5000, 1),
     ('int32', 'int4', 0, 5000, 1),
@@ -106,37 +127,72 @@ def test_numeric_type_nonnull(tmp_table_uri,
                               sqltype,
                               start,
                               stop,
-                              step):
+                              step,
+                              use_sqlalchemy):
     data = np.arange(start, stop, step, dtype=dtype)
-    check_roundtrip_nonnull(tmp_table_uri, data, dtype, sqltype)
+    check_roundtrip_nonnull(
+        tmp_table_uri,
+        data,
+        dtype,
+        sqltype,
+        use_sqlalchemy,
+    )
 
 
-def test_bool_type_nonnull(tmp_table_uri):
+@use_sqlalchemy
+def test_bool_type_nonnull(tmp_table_uri, use_sqlalchemy):
     data = np.array([True] * 2500 + [False] * 2500, dtype=bool)
-    check_roundtrip_nonnull(tmp_table_uri, data, 'bool', 'bool')
+    check_roundtrip_nonnull(
+        tmp_table_uri,
+        data,
+        'bool',
+        'bool',
+        use_sqlalchemy,
+    )
 
 
-def test_string_type_nonnull(tmp_table_uri):
+@use_sqlalchemy
+def test_string_type_nonnull(tmp_table_uri, use_sqlalchemy):
     data = np.array(list(ascii_letters) * 200, dtype='object')
-    check_roundtrip_nonnull(tmp_table_uri, data, 'object', 'text')
+    check_roundtrip_nonnull(
+        tmp_table_uri,
+        data,
+        'object',
+        'text',
+        use_sqlalchemy,
+    )
 
 
-def test_datetime_type_nonnull(tmp_table_uri):
+@use_sqlalchemy
+def test_datetime_type_nonnull(tmp_table_uri, use_sqlalchemy):
     data = np.arange(
         '2000',
         '2016',
         dtype='M8[D]',
     ).astype('datetime64[us]')
-    check_roundtrip_nonnull(tmp_table_uri, data, 'datetime64[us]', 'timestamp')
+    check_roundtrip_nonnull(
+        tmp_table_uri,
+        data,
+        'datetime64[us]',
+        'timestamp',
+        use_sqlalchemy,
+    )
 
 
-def test_date_type_nonnull(tmp_table_uri):
+@use_sqlalchemy
+def test_date_type_nonnull(tmp_table_uri, use_sqlalchemy):
     data = np.arange(
         '2000',
         '2016',
         dtype='M8[D]',
-    ).values.astype('datetime64[D]')
-    check_roundtrip_nonnull(tmp_table_uri, data, 'datetime64[D]', 'date')
+    ).astype('datetime64[D]')
+    check_roundtrip_nonnull(
+        tmp_table_uri,
+        data,
+        'datetime64[D]',
+        'date',
+        use_sqlalchemy,
+    )
 
 
 def check_roundtrip_null_values(table_uri,
@@ -145,6 +201,7 @@ def check_roundtrip_null_values(table_uri,
                                 sqltype,
                                 null_values,
                                 mask,
+                                use_sqlalchemy,
                                 *,
                                 astype=False):
     """Check the data roundtrip through postgres using warp_prism to read the
@@ -162,19 +219,33 @@ def check_roundtrip_null_values(table_uri,
         The sql type of the data.
     null_values : dict[str, any]
         The value to coerce ``NULL`` to.
+    mask : np.ndarray[bool]
+        A mask indicating which values are non-null.
+    use_sqlalchemy : bool
+        Use sqlalchemy for the query instead of psycopg2.
     astype : bool, optional
         Coerce the input data to the given dtype before making assertions about
         the output data.
     """
     db, table = table_uri.split('::')
-    with psycopg2.connect(db) as conn, conn.cursor() as cur:
-        cur.execute('create table %s (a %s)' % (table, sqltype))
-        cur.executemany(
-            'insert into {} values (%s)'.format(table),
-            [(item(v),) for v in data],
-        )
+    with psycopg2.connect(db) as conn:
+        with conn.cursor() as cur:
+            cur.execute('create table %s (a %s)' % (table, sqltype))
+            cur.executemany(
+                'insert into {} values (%s)'.format(table),
+                [(item(v),) for v in data],
+            )
+            cur.execute('commit')
 
-        query = 'select * from %s' % table
+        if use_sqlalchemy:
+            bind = sa.create_engine(db)
+            meta = sa.MetaData(bind)
+            t = sa.Table(table, meta, autoload=True)
+            query = sa.select(t.c)
+        else:
+            bind = conn
+            query = 'select * from %s' % table
+
         arrays = to_arrays(query, bind=conn)
         if pd is not None:
             output_dataframe = to_dataframe(
@@ -215,6 +286,7 @@ def check_roundtrip_null(table_uri,
                          sqltype,
                          null,
                          mask,
+                         use_sqlalchemy,
                          *,
                          astype=False):
     """Check the data roundtrip through postgres using warp_prism to read the
@@ -232,6 +304,10 @@ def check_roundtrip_null(table_uri,
         The sql type of the data.
     null : any
         The value to coerce ``NULL`` to.
+    mask : np.ndarray[bool]
+        A mask indicating which values are non-null.
+    use_sqlalchemy : bool
+        Use sqlalchemy for the query instead of psycopg2.
     astype : bool, optional
         Coerce the input data to the given dtype before making assertions about
         the output data.
@@ -243,10 +319,12 @@ def check_roundtrip_null(table_uri,
         sqltype,
         {'a': null},
         mask,
+        use_sqlalchemy,
         astype=astype,
     )
 
 
+@use_sqlalchemy
 @pytest.mark.parametrize('dtype,sqltype,start,stop,step,null', (
     ('int16', 'int2', 0, 5000, 1, -1),
     ('int32', 'int4', 0, 5000, 1, -1),
@@ -260,33 +338,64 @@ def test_numeric_type_null(tmp_table_uri,
                            start,
                            stop,
                            step,
-                           null):
+                           null,
+                           use_sqlalchemy):
     data = np.arange(start, stop, step, dtype=dtype).astype(object)
     mask = np.tile(np.array([True, False]), len(data) // 2)
     data[~mask] = None
-    check_roundtrip_null(tmp_table_uri, data, dtype, sqltype, null, mask)
+    check_roundtrip_null(
+        tmp_table_uri,
+        data,
+        dtype,
+        sqltype,
+        null,
+        mask,
+        use_sqlalchemy,
+    )
 
 
+@use_sqlalchemy
 @pytest.mark.parametrize('dtype,sqltype', (
     ('int16', 'int2'),
     ('int32', 'int4'),
     ('int64', 'int8'),
 ))
-def test_numeric_default_null_promote(tmp_table_uri, dtype, sqltype):
+def test_numeric_default_null_promote(tmp_table_uri,
+                                      dtype,
+                                      sqltype,
+                                      use_sqlalchemy):
     data = np.arange(0, 100, dtype=dtype).astype(object)
     mask = np.tile(np.array([True, False]), len(data) // 2)
     data[~mask] = None
-    check_roundtrip_null_values(tmp_table_uri, data, dtype, sqltype, {}, mask)
+    check_roundtrip_null_values(
+        tmp_table_uri,
+        data,
+        dtype,
+        sqltype,
+        {},
+        mask,
+        use_sqlalchemy,
+    )
 
 
-def test_bool_type_null(tmp_table_uri):
+@use_sqlalchemy
+def test_bool_type_null(tmp_table_uri, use_sqlalchemy):
     data = np.array([True] * 2500 + [False] * 2500, dtype=bool).astype(object)
     mask = np.tile(np.array([True, False]), len(data) // 2)
     data[~mask] = None
-    check_roundtrip_null(tmp_table_uri, data, 'bool', 'bool', False, mask)
+    check_roundtrip_null(
+        tmp_table_uri,
+        data,
+        'bool',
+        'bool',
+        False,
+        mask,
+        use_sqlalchemy,
+    )
 
 
-def test_string_type_null(tmp_table_uri):
+@use_sqlalchemy
+def test_string_type_null(tmp_table_uri, use_sqlalchemy):
     data = np.array(list(ascii_letters) * 200, dtype='object')
     mask = np.tile(np.array([True, False]), len(data) // 2)
     data[~mask] = None
@@ -297,15 +406,17 @@ def test_string_type_null(tmp_table_uri):
         'text',
         'ayy lmao',
         mask,
+        use_sqlalchemy,
     )
 
 
-def test_datetime_type_null(tmp_table_uri):
+@use_sqlalchemy
+def test_datetime_type_null(tmp_table_uri, use_sqlalchemy):
     data = np.arange(
         '2000',
         '2016',
         dtype='M8[D]',
-    ).astype('O')[:-1]  # slice the last element off to have an even number
+    ).astype('M8[us]').astype('O')
 
     mask = np.tile(np.array([True, False]), len(data) // 2)
     data[~mask] = None
@@ -316,10 +427,12 @@ def test_datetime_type_null(tmp_table_uri):
         'timestamp',
         np.datetime64('1995-12-13', 'ns'),
         mask,
+        use_sqlalchemy,
     )
 
 
-def test_date_type_null(tmp_table_uri):
+@use_sqlalchemy
+def test_date_type_null(tmp_table_uri, use_sqlalchemy):
     data = np.arange(
         '2000',
         '2016',
@@ -334,6 +447,7 @@ def test_date_type_null(tmp_table_uri):
         'date',
         np.datetime64('1995-12-13', 'ns'),
         mask,
+        use_sqlalchemy,
         astype=True,
     )
 

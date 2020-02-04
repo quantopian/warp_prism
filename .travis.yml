@@ -4,9 +4,6 @@ python:
   - "3.4"
   - "3.5"
   - "3.6"
-env:
-  - PANDAS=0
-  - PANDAS=1
 
 env:
   - CC=gcc CXX=g++
@@ -23,12 +20,10 @@ addons:
 
 install:
   - ${CC} --version
-  - pip install numpy
-  - if [ $PANDAS == "1" ];
-        pip install pandas;
-        python -c "import pandas;print(pandas.__version__)";
-    fi
+  - pip install numpy pandas sqlalchemy
   - python -c "import numpy;print(numpy.__version__)"
+  - python -c "import pandas;print(pandas.__version__)";
+  - python -c "import sqlalchemy;print(sqlalchemy.__version__)";
   - pip install -e .[dev]
 
 script:
