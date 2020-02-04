@@ -4,6 +4,9 @@ python:
   - "3.4"
   - "3.5"
   - "3.6"
+env:
+  - PANDAS=0
+  - PANDAS=1
 
 env:
   - CC=gcc CXX=g++
@@ -21,6 +24,10 @@ addons:
 install:
   - ${CC} --version
   - pip install numpy
+  - if [ $PANDAS == "1" ];
+        pip install pandas;
+        python -c "import pandas;print(pandas.__version__)";
+    fi
   - python -c "import numpy;print(numpy.__version__)"
   - pip install -e .[dev]
 

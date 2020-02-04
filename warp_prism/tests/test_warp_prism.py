@@ -3,7 +3,6 @@ import struct
 from uuid import uuid4
 
 import numpy as np
-import pandas as pd
 import psycopg2
 import pytest
 
@@ -16,6 +15,11 @@ from warp_prism import to_arrays, to_dataframe
 from warp_prism.query import null_values as null_values_for_type
 from warp_prism.types import dtype_to_typeid
 from warp_prism.tests import tmp_db_uri as tmp_db_uri_ctx
+
+try:
+    import pandas as pd
+except ImportError:
+    pd = None
 
 
 @pytest.fixture(scope='module')
@@ -73,15 +77,21 @@ def check_roundtrip_nonnull(table_uri, data, dtype, sqltype):
 
         query = 'select * from %s' % table
         arrays = to_arrays(query, bind=conn)
-        output_dataframe = to_dataframe(query, bind=conn)
+
+        if pd is not None:
+            output_dataframe = to_dataframe(query, bind=conn)
 
     assert len(arrays) == 1
     array, mask = arrays['a']
     assert (array == data).all()
     assert mask.all()
 
-    expected_dataframe = pd.DataFrame({'a': data})
-    pd.util.testing.assert_frame_equal(output_dataframe, expected_dataframe)
+    if pd is not None:
+        expected_dataframe = pd.DataFrame({'a': data})
+        pd.util.testing.assert_frame_equal(
+            output_dataframe,
+            expected_dataframe,
+        )
 
 
 @pytest.mark.parametrize('dtype,sqltype,start,stop,step', (
@@ -112,17 +122,19 @@ def test_string_type_nonnull(tmp_table_uri):
 
 
 def test_datetime_type_nonnull(tmp_table_uri):
-    data = pd.date_range(
+    data = np.arange(
         '2000',
         '2016',
-    ).values.astype('datetime64[us]')
+        dtype='M8[D]',
+    ).astype('datetime64[us]')
     check_roundtrip_nonnull(tmp_table_uri, data, 'datetime64[us]', 'timestamp')
 
 
 def test_date_type_nonnull(tmp_table_uri):
-    data = pd.date_range(
+    data = np.arange(
         '2000',
         '2016',
+        dtype='M8[D]',
     ).values.astype('datetime64[D]')
     check_roundtrip_nonnull(tmp_table_uri, data, 'datetime64[D]', 'date')
 
@@ -164,33 +176,37 @@ def check_roundtrip_null_values(table_uri,
 
         query = 'select * from %s' % table
         arrays = to_arrays(query, bind=conn)
-        output_dataframe = to_dataframe(
-            query,
-            null_values=null_values,
-            bind=conn,
-        )
+        if pd is not None:
+            output_dataframe = to_dataframe(
+                query,
+                null_values=null_values,
+                bind=conn,
+            )
 
     assert len(arrays) == 1
     array, actual_mask = arrays['a']
     assert (actual_mask == mask).all()
+
     assert (array[mask] == data[mask]).all()
 
-    if astype:
-        data = data.astype(dtype, copy=False)
-    expected_dataframe = pd.DataFrame({'a': data})
-    expected_dataframe[~mask] = null_values.get(
-        'a',
-        null_values_for_type[
-            array.dtype
-            if array.dtype.kind != 'M' else
-            np.dtype('datetime64[ns]')
-        ],
-    )
-    pd.util.testing.assert_frame_equal(
-        output_dataframe,
-        expected_dataframe,
-        check_dtype=False,
-    )
+    if pd is not None:
+        if astype:
+            data = data.astype(dtype, copy=False)
+
+        expected_dataframe = pd.DataFrame({'a': data})
+        expected_dataframe[~mask] = null_values.get(
+            'a',
+            null_values_for_type[
+                array.dtype
+                if array.dtype.kind != 'M' else
+                np.dtype('datetime64[ns]')
+            ],
+        )
+        pd.util.testing.assert_frame_equal(
+            output_dataframe,
+            expected_dataframe,
+            check_dtype=False,
+        )
 
 
 def check_roundtrip_null(table_uri,
@@ -285,13 +301,12 @@ def test_string_type_null(tmp_table_uri):
 
 
 def test_datetime_type_null(tmp_table_uri):
-    data = np.array(
-        list(pd.date_range(
-            '2000',
-            '2016',
-        )),
-        dtype=object,
-    )[:-1]  # slice the last element off to have an even number
+    data = np.arange(
+        '2000',
+        '2016',
+        dtype='M8[D]',
+    ).astype('O')[:-1]  # slice the last element off to have an even number
+
     mask = np.tile(np.array([True, False]), len(data) // 2)
     data[~mask] = None
     check_roundtrip_null(
@@ -299,7 +314,7 @@ def test_datetime_type_null(tmp_table_uri):
         data,
         'datetime64[us]',
         'timestamp',
-        pd.Timestamp('1995-12-13').to_datetime64(),
+        np.datetime64('1995-12-13', 'ns'),
         mask,
     )
 
@@ -382,8 +397,7 @@ def test_invalid_datetime_size():
     input_data = _pack_as_invalid_size_postgres_binary_data(
         'q',  # int64_t (quadword)
         8,
-        (pd.Timestamp('2014-01-01').to_datetime64().astype('datetime64[us]') +
-         _epoch_offset).view('int64'),
+        (np.datetime64('2014-01-01', 'us') + _epoch_offset).view('int64'),
     )
 
     dtype = np.dtype('datetime64[us]')
