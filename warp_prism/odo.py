@@ -1,3 +1,7 @@
+from .query import to_dataframe
+from .sql import getbind
+
+
 def register_odo_dataframe_edge():
     """Register an odo edge for sqlalchemy selectable objects to dataframe.
 
@@ -21,7 +25,7 @@ def register_odo_dataframe_edge():
         cost=df_cost,
     )
     def select_or_selectable_to_frame(el, bind=None, dshape=None, **kwargs):
-        bind = _getbind(el, bind)
+        bind = getbind(el, bind)
 
         if bind.dialect.name != 'postgresql':
             # fall back to the general edge
@@ -38,7 +42,7 @@ def register_odo_dataframe_edge():
         cost=df_cost - 1,
     )
     def select_or_selectable_to_series(el, bind=None, dshape=None, **kwargs):
-        bind = _getbind(el, bind)
+        bind = getbind(el, bind)
 
         if istabular(dshape) or bind.dialect.name != 'postgresql':
             # fall back to the general edge
