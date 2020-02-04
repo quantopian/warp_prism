@@ -42,17 +42,14 @@ setup(
         ),
     ],
     install_requires=[
-        'datashape',
         'numpy',
-        'pandas',
-        'sqlalchemy',
         'psycopg2',
-        'odo',
-        'toolz',
-        'networkx<=1.11',
     ],
     extras_require={
         'dev': [
+            'odo',
+            'pandas==0.18.1',
+            'networkx<=1.11',
             'flake8==3.3.0',
             'pycodestyle==2.3.1',
             'pyflakes==1.5.0',

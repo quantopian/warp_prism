@@ -63,3 +63,4 @@ benchmarks.db
 .dir-locals.el
 
 TAGS
+.gdb_history

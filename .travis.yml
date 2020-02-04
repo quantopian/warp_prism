@@ -1,7 +1,6 @@
 language: python
 sudo: false
 python:
-  - "3.4"
   - "3.5"
   - "3.6"
 
@@ -20,8 +19,10 @@ addons:
 
 install:
   - ${CC} --version
-  - pip install numpy
+  - pip install numpy pandas sqlalchemy
   - python -c "import numpy;print(numpy.__version__)"
+  - python -c "import pandas;print(pandas.__version__)";
+  - python -c "import sqlalchemy;print(sqlalchemy.__version__)";
   - pip install -e .[dev]
 
 script:
